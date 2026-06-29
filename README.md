@@ -21,6 +21,10 @@ VodLink creates its own `obs-private` tree under the app-local data folder, pass
 - Game-only mode captures the desktop visually through OBS monitor/display capture, then places a black privacy mask over it whenever the detected game executable is not the foreground window. Audio stays OBS per-process game audio only.
 - Game + external audio uses the same focus-gated desktop video, but captures system output audio plus the default microphone.
 - Desktop captures the desktop visually with game-only audio. Desktop with external audio captures desktop video, system output audio, and the default microphone.
+## Privacy
+
+See [PRIVACY.md](PRIVACY.md) for what VodLink stores locally, what it sends to YouTube/Google, and what the optional Worker shares for mutual VOD matching.
+
 
 ## Building
 

@@ -1604,6 +1604,7 @@ struct RtmpStreamer::ObsHandles
     obs_canvas_t *canvas = nullptr;
     obs_scene_t *scene = nullptr;
     obs_source_t *videoSource = nullptr;
+    obs_sceneitem_t *videoItem = nullptr;
     obs_source_t *audioSource = nullptr;
     obs_source_t *micSource = nullptr;
     obs_source_t *focusOverlaySource = nullptr;
@@ -2112,7 +2113,8 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
         ObsDataPtr settings = makeVideoSourceSettings(sourceId, mode, audioSource, m_colorMode, obsWindowSpec, obsMonitorId);
         const QByteArray id = utf8(sourceId);
         m_obs->videoSource = obs_source_create_private(id.constData(), "VodLink Video", settings.get());
-        if (m_obs->videoSource != nullptr && addSourceToScene(m_obs->scene, m_obs->videoSource, m_outputSize)) {
+        m_obs->videoItem = addSourceToSceneItem(m_obs->scene, m_obs->videoSource, m_outputSize);
+        if (m_obs->videoSource != nullptr && m_obs->videoItem != nullptr) {
 #if defined(Q_OS_WIN)
             obs_source_set_audio_mixers(m_obs->videoSource, 0);
 #else
@@ -2124,6 +2126,7 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
             DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("video source created %1").arg(sourceId));
             break;
         }
+        m_obs->videoItem = nullptr;
         if (m_obs->videoSource != nullptr) {
             obs_source_release(m_obs->videoSource);
             m_obs->videoSource = nullptr;
@@ -2147,28 +2150,42 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
                 break;
             }
         }
-        if (overlayId.isEmpty()) {
+        if (!overlayId.isEmpty()) {
+            ObsDataPtr settings = makeBlackOverlaySettings(m_outputSize);
+            const QByteArray overlaySourceId = utf8(overlayId);
+            m_obs->focusOverlaySource = obs_source_create_private(overlaySourceId.constData(), "VodLink Focus Privacy Mask", settings.get());
+            m_obs->focusOverlayItem = addSourceToSceneItem(m_obs->scene, m_obs->focusOverlaySource, m_outputSize);
+            if (m_obs->focusOverlaySource == nullptr || m_obs->focusOverlayItem == nullptr) {
+                DebugLog::writeCategory(QStringLiteral("OBS"),
+                                        QStringLiteral("focus mask color source failed; falling back to hiding the desktop source"));
+                if (m_obs->focusOverlaySource != nullptr) {
+                    obs_source_release(m_obs->focusOverlaySource);
+                    m_obs->focusOverlaySource = nullptr;
+                }
+                m_obs->focusOverlayItem = nullptr;
+            }
+        } else {
+            DebugLog::writeCategory(QStringLiteral("OBS"),
+                                    QStringLiteral("no OBS color source registered; focus gate will black out by hiding the desktop source"));
+        }
+
+        if (m_obs->focusOverlayItem == nullptr && m_obs->videoItem == nullptr) {
             if (error != nullptr) {
-                *error = QStringLiteral("OBS did not register a color source, so VodLink cannot safely black out the desktop when the game is not focused.");
+                *error = QStringLiteral("OBS could not create a Game privacy black-screen gate.");
             }
             return false;
         }
-        ObsDataPtr settings = makeBlackOverlaySettings(m_outputSize);
-        const QByteArray overlaySourceId = utf8(overlayId);
-        m_obs->focusOverlaySource = obs_source_create_private(overlaySourceId.constData(), "VodLink Focus Privacy Mask", settings.get());
-        m_obs->focusOverlayItem = addSourceToSceneItem(m_obs->scene, m_obs->focusOverlaySource, m_outputSize);
-        if (m_obs->focusOverlaySource == nullptr || m_obs->focusOverlayItem == nullptr) {
-            if (error != nullptr) {
-                *error = QStringLiteral("OBS could not create the Game privacy black-screen overlay.");
-            }
-            return false;
-        }
+
         m_focusGateEnabled = true;
-        // OBS scene items are visible by default. Treat the freshly-created mask
-        // as visible so the first focus poll can hide it immediately if the game
-        // is already foreground, or leave it black while the user is alt-tabbed.
+        // Start black by default. The first focus poll will reveal the desktop
+        // immediately when the target game is already foreground, but if the
+        // user starts while alt-tabbed we never leak the desktop for a frame.
         m_focusGateBlack = true;
-        obs_sceneitem_set_visible(m_obs->focusOverlayItem, true);
+        if (m_obs->focusOverlayItem != nullptr) {
+            obs_sceneitem_set_visible(m_obs->focusOverlayItem, true);
+        } else if (m_obs->videoItem != nullptr) {
+            obs_sceneitem_set_visible(m_obs->videoItem, false);
+        }
         updateFocusGateOverlay();
         m_focusGateTimer.start();
     }
@@ -2462,6 +2479,8 @@ void RtmpStreamer::releaseObsObjects()
         obs_source_release(m_obs->focusOverlaySource);
         m_obs->focusOverlaySource = nullptr;
         m_obs->focusOverlayItem = nullptr;
+    } else {
+        m_obs->focusOverlayItem = nullptr;
     }
     if (m_obs->micSource != nullptr) {
         obs_source_release(m_obs->micSource);
@@ -2475,6 +2494,7 @@ void RtmpStreamer::releaseObsObjects()
         obs_source_release(m_obs->videoSource);
         m_obs->videoSource = nullptr;
     }
+    m_obs->videoItem = nullptr;
     if (m_obs->scene != nullptr) {
         if (m_obs->canvas != nullptr) {
             obs_canvas_scene_remove(m_obs->scene);
@@ -2522,7 +2542,10 @@ void RtmpStreamer::handleOutputStopped(int code)
 
 void RtmpStreamer::updateFocusGateOverlay()
 {
-    if (!m_focusGateEnabled || !m_obs || m_obs->focusOverlayItem == nullptr) {
+    if (!m_focusGateEnabled || !m_obs) {
+        return;
+    }
+    if (m_obs->focusOverlayItem == nullptr && m_obs->videoItem == nullptr) {
         return;
     }
 
@@ -2534,10 +2557,19 @@ void RtmpStreamer::updateFocusGateOverlay()
     }
 
     m_focusGateBlack = shouldBlack;
-    obs_sceneitem_set_visible(m_obs->focusOverlayItem, shouldBlack);
+    if (m_obs->focusOverlayItem != nullptr) {
+        obs_sceneitem_set_visible(m_obs->focusOverlayItem, shouldBlack);
+    } else if (m_obs->videoItem != nullptr) {
+        // Fallback for minimal OBS runtimes that do not ship a color source:
+        // hiding every video item leaves the private OBS canvas black, while
+        // audio continues. This keeps Game only usable without exposing the
+        // desktop when the game is not focused.
+        obs_sceneitem_set_visible(m_obs->videoItem, !shouldBlack);
+    }
     DebugLog::writeCategory(QStringLiteral("OBS"),
-                            QStringLiteral("focus privacy mask %1 (%2)")
-                                .arg(shouldBlack ? QStringLiteral("shown") : QStringLiteral("hidden"),
+                            QStringLiteral("focus privacy gate %1 via %2 (%3)")
+                                .arg(shouldBlack ? QStringLiteral("black") : QStringLiteral("clear"),
+                                     m_obs->focusOverlayItem != nullptr ? QStringLiteral("overlay") : QStringLiteral("video-source-visibility"),
                                      details));
 }
 

@@ -1584,9 +1584,34 @@ void MainWindow::openSettingsDialog()
         m_controller->setAppSetting(QString::fromLatin1(kFpsSetting), text);
     });
 
-    // Resolution/FPS changes must not silently replace a manual bitrate. Fresh
-    // installs get a recommended default above; after that, the bitrate box is
-    // the source of truth until the user changes it.
+    auto applyRecommendedBitrate = [this, bitrate, resolution, fps, encoder] {
+        const QString normalized = normalizedResolutionText(resolution->currentText());
+        if (normalized.isEmpty()) {
+            return;
+        }
+        const int recommended = recommendedBitrateKbps(normalized,
+                                                      fps->currentText().toInt(),
+                                                      isEfficientCodec(encoder->currentText()));
+        const int clamped = (std::clamp)(recommended, bitrate->minimum(), bitrate->maximum());
+        {
+            const QSignalBlocker blocker(bitrate);
+            bitrate->setValue(clamped);
+        }
+        m_controller->setAppSetting(QString::fromLatin1(kBitrateSetting), QString::number(clamped));
+    };
+
+    // Resolution/FPS/encoder changes should snap the bitrate to the matching
+    // YouTube recommendation. The user can still adjust the spinbox afterwards;
+    // that manual value is what gets used until another quality setting changes.
+    connect(resolution, &QComboBox::currentTextChanged, this, [applyRecommendedBitrate](const QString &) {
+        applyRecommendedBitrate();
+    });
+    connect(fps, &QComboBox::currentTextChanged, this, [applyRecommendedBitrate](const QString &) {
+        applyRecommendedBitrate();
+    });
+    connect(encoder, &QComboBox::currentTextChanged, this, [applyRecommendedBitrate](const QString &) {
+        applyRecommendedBitrate();
+    });
 
     auto *privacy = new QComboBox;
     privacy->setMinimumWidth(300);
@@ -1718,6 +1743,18 @@ void MainWindow::openSettingsDialog()
     buttonRow->addWidget(closeButton);
     layout->addLayout(buttonRow);
     connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+
+    // QPushButton enables autoDefault inside dialogs. With no explicit default
+    // button, Qt can route Enter/Return from editor widgets such as the bitrate
+    // spinbox into the first auto-default push button in tab order, which is the
+    // "Add game manually" action. Settings buttons should only fire on an
+    // explicit click/Space while focused; Enter in a field should just commit the
+    // field's value.
+    const auto pushButtons = dialog.findChildren<QPushButton *>();
+    for (QPushButton *button : pushButtons) {
+        button->setAutoDefault(false);
+        button->setDefault(false);
+    }
 
     const auto clickable = dialog.findChildren<QWidget *>();
     for (QWidget *widget : clickable) {
