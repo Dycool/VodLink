@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6f5cff">
+  <meta name="description" content="VodLink is an open-source desktop app that automatically records game sessions as YouTube VODs.">
+  <meta property="og:title" content="VodLink — YouTube VODs for every game session">
+  <meta property="og:description" content="Detect a game, stream to YouTube, and keep a fast local VOD library.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/vodlink.png">
+  <title>VodLink — YouTube VODs for game sessions</title>
+  <link rel="icon" href="assets/vodlink.png" type="image/png">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header" data-nav>
+    <a class="brand" href="#top" aria-label="VodLink home">
+      <img src="assets/vodlink.png" alt="" width="36" height="36">
+      <span>VodLink</span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    <nav id="nav-links" class="nav-links" aria-label="Primary navigation">
+      <a href="#features">Features</a>
+      <a href="#quality">Quality</a>
+      <a href="#worker">Worker</a>
+      <a href="https://github.com/Dycool/VodLink">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section id="top" class="hero section-shell">
+      <div class="hero-copy reveal">
+        <p class="eyebrow">Open-source desktop recorder</p>
+        <h1>Your game sessions, automatically saved as YouTube VODs.</h1>
+        <p class="hero-text">VodLink detects supported games, opens a YouTube Live broadcast, streams through its private OBS runtime, and keeps a fast local library of the finished recordings.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="https://github.com/Dycool/VodLink/releases">Download builds</a>
+          <a class="button ghost" href="https://github.com/Dycool/VodLink">View source</a>
+        </div>
+        <div class="trust-row" aria-label="Highlights">
+          <span>Local VOD library</span>
+          <span>YouTube-hosted recordings</span>
+          <span>Private OBS runtime</span>
+        </div>
+      </div>
+
+      <div class="hero-visual reveal" aria-label="VodLink app preview">
+        <div class="app-card">
+          <div class="app-topbar">
+            <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <strong>VodLink</strong>
+            <span class="live-pill">LIVE</span>
+          </div>
+          <div class="preview-frame">
+            <div class="scanlines" aria-hidden="true"></div>
+            <div class="play-orb" aria-hidden="true"></div>
+            <div class="timeline-card one">
+              <b>Counter-Strike 2</b>
+              <span>Recording to YouTube</span>
+            </div>
+            <div class="timeline-card two">
+              <b>Local Library</b>
+              <span>thumbnail refresh active</span>
+            </div>
+          </div>
+          <div class="session-strip">
+            <div><span>Game</span><strong>Counter-Strike 2</strong></div>
+            <div><span>Encoder</span><strong>NVENC</strong></div>
+            <div><span>Quality</span><strong>3440×1440 60</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section-shell section-padding">
+      <div class="section-heading reveal">
+        <p class="eyebrow">What it does</p>
+        <h2>One app for capture, upload, playback, and library management.</h2>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card reveal">
+          <span class="icon-badge">01</span>
+          <h3>Auto game sessions</h3>
+          <p>VodLink detects supported games, starts a YouTube Live broadcast, and records the session without making you babysit OBS scenes.</p>
+        </article>
+        <article class="feature-card reveal">
+          <span class="icon-badge">02</span>
+          <h3>Private OBS runtime</h3>
+          <p>The app initializes its own bundled libobs runtime and never touches your installed OBS Studio profile, scenes, plugins, cache, or settings.</p>
+        </article>
+        <article class="feature-card reveal">
+          <span class="icon-badge">03</span>
+          <h3>Fast YouTube playback</h3>
+          <p>A lightweight YouTube facade keeps the UI quick, then loads the real player only for the VOD you actually open.</p>
+        </article>
+        <article class="feature-card reveal">
+          <span class="icon-badge">04</span>
+          <h3>Clips and thumbnails</h3>
+          <p>Track YouTube clips and keep thumbnails fresh after streams finish, without swapping the UI when the image has not actually changed.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="quality" class="section-shell quality-band reveal" aria-label="Stream quality">
+      <div>
+        <p class="eyebrow">Quality</p>
+        <h2>Exact canvas, YouTube-friendly ladder.</h2>
+        <p>VodLink keeps the OBS canvas you select — including ultrawide resolutions — while advertising the closest higher YouTube tier by pixel count so weird resolutions do not get shoved into a lower playback ladder.</p>
+      </div>
+      <div class="quality-stack">
+        <span>2560×1080 → 1440p tier</span>
+        <span>3440×1440 → 2160p tier</span>
+        <span>Manual bitrate still allowed</span>
+      </div>
+    </section>
+
+    <section id="worker" class="section-shell split-section section-padding">
+      <div class="reveal">
+        <p class="eyebrow">Optional backend</p>
+        <h2>Friend matching without storing video.</h2>
+        <p>The included Cloudflare Worker only handles short-lived matching metadata. Video and audio still go from your machine directly to YouTube.</p>
+        <div class="formula-card" aria-label="Worker routes">
+          <code>POST /start → open a session</code>
+          <code>GET /stop → close and match sessions</code>
+        </div>
+      </div>
+      <div class="worker-card reveal">
+        <div class="lock-orb" aria-hidden="true"></div>
+        <h3>Small by design</h3>
+        <p>One start request, one stop request, short-lived D1 rows, and no custom video hosting.</p>
+      </div>
+    </section>
+
+    <section class="section-shell section-padding">
+      <div class="cta-panel reveal">
+        <h2>Automatic YouTube VODs without babysitting OBS.</h2>
+        <p>Download a release build or inspect the source on GitHub.</p>
+        <div class="hero-actions centered">
+          <a class="button primary" href="https://github.com/Dycool/VodLink/releases">Download VodLink</a>
+          <a class="button ghost" href="https://github.com/Dycool/VodLink">View source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="section-shell footer-inner">
+      <a class="brand" href="#top">
+        <img src="assets/vodlink.png" alt="" width="32" height="32">
+        <span>VodLink</span>
+      </a>
+      <div class="footer-links">
+        <a href="https://github.com/Dycool/VodLink">GitHub</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="https://github.com/Dycool/VodLink/releases">Releases</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6f5cff">
+  <meta name="description" content="VodLink privacy policy.">
+  <title>VodLink Privacy Policy</title>
+  <link rel="icon" href="assets/vodlink.png" type="image/png">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body class="doc-page">
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="VodLink home">
+      <img src="assets/vodlink.png" alt="" width="36" height="36">
+      <span>VodLink</span>
+    </a>
+    <nav class="nav-links always-visible" aria-label="Secondary navigation">
+      <a href="index.html">Home</a>
+      <a href="https://github.com/Dycool/VodLink">GitHub</a>
+    </nav>
+  </header>
+  <main class="section-shell doc-article">
+    <a class="inline-link" href="index.html">← Back to website</a>
+    <h1>VodLink Privacy Policy</h1>
+<p>Effective date: 2026-06-30</p>
+<p>VodLink is an open-source desktop app that records game sessions by creating YouTube Live broadcasts and streaming directly from your computer to your own YouTube channel. This policy explains what data VodLink handles, where it goes, and how you can delete it.</p>
+<p>This policy describes the official VodLink app and the optional VodLink Cloudflare Worker included in this repository. If you fork, modify, self-host, or redistribute VodLink, your build and infrastructure may handle data differently.</p>
+<h2>Summary</h2>
+<ul>
+<li>VodLink streams video and audio from your computer directly to YouTube. VodLink does not run a server that stores your stream content.</li>
+<li>Your Google/YouTube account is used to create, manage, embed, and sync your own YouTube broadcasts, VODs, and clips.</li>
+<li>Most app data stays on your computer, including settings, cached VOD metadata, friends, detected games, clips, and sign-in refresh tokens.</li>
+<li>The optional Worker is used only for friend/session matching. It stores short-lived session metadata and deletes old rows automatically.</li>
+<li>VodLink does not sell personal data and does not include third-party ads or analytics.</li>
+</ul>
+<h2>Data VodLink handles locally</h2>
+<p>VodLink may store the following on your computer:</p>
+<ul>
+<li>Google OAuth refresh token used to keep you signed in.</li>
+<li>Your Google account email, display name, and profile picture URL, when returned by Google sign-in.</li>
+<li>App settings such as stream resolution, FPS, bitrate, capture mode, encoder choice, worker URL, sharing toggle, and UI preferences.</li>
+<li>Local VOD and clip library entries, including YouTube video IDs, clip IDs, titles, descriptions, timestamps, games, owners, and thumbnail cache metadata.</li>
+<li>Your local friend list used for optional VOD matching.</li>
+<li>Detected or manually added games and executable names.</li>
+<li>App cache and private OBS runtime files extracted or used by the app.</li>
+<li>Debug logs, only when you intentionally run the app with debug logging enabled.</li>
+</ul>
+<p>VodLink stores its app data inside its own local data folder. The app&#x27;s reset option is intended to close VodLink and delete local VodLink data from this computer, including sign-in tokens, settings, friends, cached VODs, clips, games, and cache files.</p>
+<h2>Google and YouTube data</h2>
+<p>When you sign in with Google, VodLink uses OAuth access granted by you to perform YouTube actions for your account. Depending on the app flow and the permissions you grant, VodLink may:</p>
+<ul>
+<li>Create YouTube Live broadcasts and live streams.</li>
+<li>Bind a broadcast to a stream key/ingest endpoint.</li>
+<li>Update broadcast/video metadata such as title, description, privacy status, embeddability, DVR/archive settings, recording status, and public stats visibility where supported by YouTube.</li>
+<li>Start, stop, complete, and sync broadcasts/VODs.</li>
+<li>Read your VodLink-created or channel-associated VOD metadata so the local library can stay in sync.</li>
+<li>Create and track YouTube Clips when supported by your account and YouTube.</li>
+<li>Embed YouTube videos and thumbnails inside the app for playback and POV switching.</li>
+</ul>
+<p>Your live video/audio content is sent from your computer to YouTube using YouTube RTMP/RTMPS ingest. YouTube processes, stores, publishes, deletes, and retains that content according to your YouTube account settings and Google&#x27;s policies.</p>
+<p>VodLink does not ask for your Google password. Sign-in happens through Google&#x27;s OAuth flow. You can revoke VodLink&#x27;s Google access from your Google Account security settings.</p>
+<h2>Screen, game, desktop, and audio capture</h2>
+<p>VodLink captures only according to the mode you select:</p>
+<ul>
+<li>Game only: captures desktop video through OBS monitor/display capture, but blacks out the image when the detected game executable is not the foreground window. Audio is intended to be game/process audio only.</li>
+<li>Game and external audio: uses the same focus-gated desktop video, with system output audio and the default microphone.</li>
+<li>Desktop: captures the desktop visually with game-only audio.</li>
+<li>Desktop with external audio: captures desktop video, system output audio, and the default microphone.</li>
+</ul>
+<p>Because desktop-style capture can include sensitive on-screen information when visible, you should verify the selected mode before streaming.</p>
+<h2>Optional friend/session matching Worker</h2>
+<p>VodLink can optionally call the Cloudflare Worker in this repository to find mutual friends who streamed the same game during an overlapping time window. If sharing is off, the app does not need to call the Worker for matching.</p>
+<p>When sharing is enabled, the Worker may receive and temporarily store:</p>
+<ul>
+<li>Your verified Google email address.</li>
+<li>Your Google display name and profile picture URL, if present in the verified Google ID token.</li>
+<li>The selected game name.</li>
+<li>Your YouTube video ID.</li>
+<li>Session start and stop timestamps.</li>
+<li>The friend email addresses you configured in VodLink.</li>
+</ul>
+<p>The Worker returns a friend&#x27;s VOD only when both users listed each other and streamed the same game during an overlapping window.</p>
+<p>The Worker is designed to keep no permanent session state. It deletes sessions older than 24 hours during normal <code>/stop</code> cleanup. For rate limiting, it stores hashed IP/account-scope keys and fixed-window counters; it does not persist raw IP addresses or bearer tokens in the D1 tables.</p>
+<h2>Data shared with other users</h2>
+<p>When VOD sharing is enabled and a mutual match is found, VodLink may show matched friends:</p>
+<ul>
+<li>Your display name and profile picture, if available.</li>
+<li>Your email address.</li>
+<li>Your YouTube video ID/link.</li>
+<li>The game name.</li>
+<li>Session start/stop timestamps used for real-time POV sync.</li>
+</ul>
+<p>Do not enable sharing or add someone as a friend if you do not want that information to be available to matched mutual friends.</p>
+<h2>Third-party services</h2>
+<p>VodLink may interact with:</p>
+<ul>
+<li>Google Sign-In / OAuth, for authentication and authorization.</li>
+<li>YouTube Data API, YouTube Live Streaming API, YouTube embeds, thumbnails, and RTMP/RTMPS ingest.</li>
+<li>Cloudflare Workers and D1, if you use the optional matching Worker.</li>
+<li>Operating-system APIs for foreground window detection, display capture, audio capture, game detection, GPU preference, and local storage.</li>
+</ul>
+<p>Those services may process data under their own terms and privacy policies.</p>
+<h2>What VodLink does not do</h2>
+<p>VodLink does not intentionally:</p>
+<ul>
+<li>Sell your personal data.</li>
+<li>Include third-party advertising SDKs.</li>
+<li>Include analytics or tracking SDKs.</li>
+<li>Upload your local friend list to any service except the optional matching Worker when sharing is enabled.</li>
+<li>Store your stream video/audio on a VodLink-operated backend.</li>
+<li>Read your installed OBS Studio profile, scenes, plugins, logs, cache, or configuration.</li>
+</ul>
+<h2>Data deletion and control</h2>
+<p>You can control or delete data in several places:</p>
+<ul>
+<li>In VodLink, use the reset option to delete local VodLink data on this computer.</li>
+<li>In YouTube Studio, delete or edit videos, live broadcasts, clips, titles, descriptions, visibility, and related metadata.</li>
+<li>In your Google Account, revoke VodLink&#x27;s OAuth access.</li>
+<li>In your self-hosted Worker/D1 database, delete rows or drop the database if you operate your own backend.</li>
+</ul>
+<p>Deleting local VodLink data does not automatically delete videos already stored on YouTube. Deleting a YouTube video may leave a stale local entry until VodLink syncs or you remove the local entry.</p>
+<h2>Security</h2>
+<p>VodLink uses Google&#x27;s OAuth flow rather than collecting Google passwords. The Worker verifies Google ID tokens before accepting <code>/start</code> or <code>/stop</code> requests and uses rate limiting to reduce abuse. Network transport should be HTTPS/WSS in production.</p>
+<p>No app can guarantee perfect security. Avoid streaming sensitive information and keep your operating system, drivers, browser/WebView runtime, and VodLink build up to date.</p>
+<h2>Children</h2>
+<p>VodLink is intended for users who are old enough to use Google/YouTube and live streaming features under the rules that apply to their account and location. VodLink is not designed for children.</p>
+<h2>Changes to this policy</h2>
+<p>This policy may change as VodLink changes. Material changes should be committed to this repository with an updated effective date.</p>
+<h2>Contact</h2>
+<p>For privacy questions, open an issue in the VodLink repository or contact the repository maintainer through the contact method published on the repository profile.</p>
+  </main>
+</body>
+</html>
