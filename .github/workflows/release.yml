@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag and commit
+        id: ref
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "This workflow is intended for v* tags."
+            exit 1
+          fi
+
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v ]]; then
+            echo "Tag must start with v. Got: $TAG"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Find matching build.yml run
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.ref.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RUN_ID="$(gh run list \
+            --workflow build.yml \
+            --commit "$SHA" \
+            --status success \
+            --limit 20 \
+            --json databaseId \
+            --jq '.[0].databaseId')"
+
+          if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
+            echo "No successful build.yml run found for commit $SHA"
+            echo "Run build.yml first for this tag/commit."
+            exit 1
+          fi
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Using build.yml run: $RUN_ID"
+
+      - name: Download build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.build.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded
+          gh run download "$RUN_ID" --dir downloaded
+          find downloaded -maxdepth 4 -type f -print
+
+      - name: Normalize release files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release
+
+          WINDOWS_EXE="$(find downloaded -type f -iname 'VodLink.exe' | head -n 1 || true)"
+          MAC_APP_DIR="$(find downloaded -type d -name 'VodLink.app' | head -n 1 || true)"
+          LINUX_APPIMAGE="$(find downloaded -type f -iname 'VodLink.AppImage' | head -n 1 || true)"
+
+          if [[ -z "$WINDOWS_EXE" ]]; then
+            echo "Could not find VodLink.exe in downloaded artifacts."
+            exit 1
+          fi
+
+          if [[ -z "$MAC_APP_DIR" ]]; then
+            echo "Could not find VodLink.app in downloaded artifacts."
+            exit 1
+          fi
+
+          if [[ -z "$LINUX_APPIMAGE" ]]; then
+            echo "Could not find VodLink.AppImage in downloaded artifacts."
+            exit 1
+          fi
+
+          cp "$WINDOWS_EXE" release/VodLink.exe
+          cp "$LINUX_APPIMAGE" release/VodLink.AppImage
+          chmod +x release/VodLink.AppImage
+          test "$(stat -c%s release/VodLink.AppImage)" -gt 100000000
+
+          ditto -c -k --keepParent "$MAC_APP_DIR" release/VodLink.app.zip
+
+          echo "Release files:"
+          ls -lh release
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ref.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "$TAG" \
+            release/VodLink.exe \
+            release/VodLink.app.zip \
+            release/VodLink.AppImage \
+            --title "VodLink $TAG" \
+            --notes "VodLink release $TAG" \
+            --verify-tag

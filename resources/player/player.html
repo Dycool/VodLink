@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <title>VodLink Player</title>
+  <link rel="preconnect" href="https://www.youtube.com">
+  <link rel="preconnect" href="https://www.youtube-nocookie.com">
+  <link rel="preconnect" href="https://i.ytimg.com">
+  <link rel="preconnect" href="https://s.ytimg.com">
+  <style>
+    html, body { margin: 0; height: 100%; background: #07080b; overflow: hidden; }
+    #players { position: fixed; inset: 0; background: #07080b; }
+    .playerSlot, .playerSlot iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .playerSlot { display: block; opacity: 0; pointer-events: none; background: #07080b; z-index: 0; }
+    .playerSlot.active { opacity: 1; pointer-events: auto; z-index: 1; }
+    #overlay {
+      position: fixed; inset: 0; display: none; place-items: center;
+      color: #8d94a5; font: 16px sans-serif; text-align: center; padding: 24px;
+      background: rgba(7, 8, 11, 0.92); z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="players"></div>
+  <div id="overlay">Select a VOD to watch</div>
+
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script>
+    let apiReady = false;
+    let bridge = null;
+    let pendingLoad = null;      // { videoId, seek }
+    let pendingCache = [];       // video ids requested before the API is ready
+    let activeId = '';
+    let lastLoad = null;
+    let retryCount = 0;
+    let retryTimer = null;
+    let reportTimer = null;
+    let apiTimer = null;
+    let nextSlot = 1;
+    const players = new Map();   // videoId -> { player, div, ready, pendingSeek, lastUsed }
+    const maxCachedPlayers = 6;
+    const appOrigin = (window.location.origin && window.location.origin !== 'null')
+      ? window.location.origin
+      : 'https://vodlink.app';
+
+    function showOverlay(text) {
+      const o = document.getElementById('overlay');
+      if (text) { o.textContent = text; o.style.display = 'grid'; }
+      else { o.style.display = 'none'; }
+    }
+
+    function normalizeIds(ids) {
+      if (!ids) return [];
+      if (Array.isArray(ids)) return ids.map(String).filter(Boolean);
+      if (typeof ids === 'string') return ids.split(',').map(s => s.trim()).filter(Boolean);
+      try { return Array.from(ids).map(String).filter(Boolean); } catch (_) { return []; }
+    }
+
+    function slotFor(videoId) {
+      return players.get(videoId) || null;
+    }
+
+    function evictCache() {
+      if (players.size <= maxCachedPlayers) return;
+      const candidates = Array.from(players.entries())
+        .filter(([id]) => id !== activeId)
+        .sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
+      while (players.size > maxCachedPlayers && candidates.length) {
+        const [id, slot] = candidates.shift();
+        try { slot.player.destroy(); } catch (_) {}
+        try { slot.div.remove(); } catch (_) {}
+        players.delete(id);
+      }
+    }
+
+    function createPlayer(videoId, preferredSeek, autoplay) {
+      const existing = slotFor(videoId);
+      if (existing) {
+        existing.lastUsed = Date.now();
+        if (typeof preferredSeek === 'number') existing.pendingSeek = preferredSeek;
+        return existing;
+      }
+
+      const div = document.createElement('div');
+      div.className = 'playerSlot';
+      div.id = 'yt-slot-' + (nextSlot++);
+      document.getElementById('players').appendChild(div);
+
+      const slot = { player: null, div, ready: false, pendingSeek: preferredSeek || 0, lastUsed: Date.now() };
+      players.set(videoId, slot);
+
+      slot.player = new YT.Player(div.id, {
+        width: '100%', height: '100%', videoId,
+        playerVars: {
+          autoplay: autoplay ? 1 : 0,
+          controls: 1, rel: 0, modestbranding: 1, playsinline: 1, enablejsapi: 1,
+          iv_load_policy: 3, fs: 1, origin: appOrigin, widget_referrer: appOrigin + '/',
+          start: Math.max(0, Math.floor(slot.pendingSeek || 0)),
+        },
+        events: {
+          onReady: function () {
+            slot.ready = true;
+            // Hidden cached players are intentionally paused. The iframe/player
+            // instance and YouTube JS state stay warm, making participant switches
+            // much smoother than destroying/reloading one iframe every time.
+            if (activeId === videoId) {
+              seekAndPlay(videoId, slot.pendingSeek || 0);
+            } else {
+              try { slot.player.pauseVideo(); } catch (_) {}
+            }
+          },
+          onStateChange: function (e) { onStateChange(videoId, e); },
+          onError: function (e) { onPlayerError(videoId, e); },
+          onAutoplayBlocked: onAutoplayBlocked,
+        },
+      });
+
+      evictCache();
+      return slot;
+    }
+
+    function setActive(videoId) {
+      players.forEach((slot, id) => {
+        if (id === videoId) {
+          slot.div.classList.add('active');
+        } else {
+          slot.div.classList.remove('active');
+          try { slot.player.pauseVideo(); } catch (_) {}
+        }
+      });
+      activeId = videoId;
+    }
+
+    function seekAndPlay(videoId, seek) {
+      const slot = slotFor(videoId);
+      if (!slot || !slot.player) return;
+      slot.lastUsed = Date.now();
+      const start = Math.max(0, Number(seek || 0));
+      try {
+        if (slot.ready) {
+          slot.player.seekTo(start, true);
+          slot.player.playVideo();
+        } else {
+          slot.pendingSeek = start;
+        }
+      } catch (_) {
+        showOverlay('Could not load this VOD inside the app.');
+      }
+    }
+
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.onerror = function () {
+      showOverlay('Could not load the YouTube embedded player API. Check network access inside Qt WebEngine.');
+    };
+    document.head.appendChild(tag);
+    apiTimer = setTimeout(() => {
+      if (!apiReady) {
+        showOverlay('YouTube embedded player is still loading. If it stays here, Qt WebEngine could not reach youtube.com.');
+      }
+    }, 10000);
+
+    window.onYouTubeIframeAPIReady = function () {
+      apiReady = true;
+      if (apiTimer) { clearTimeout(apiTimer); apiTimer = null; }
+      cacheVideos(pendingCache);
+      pendingCache = [];
+      if (pendingLoad) {
+        doLoad(pendingLoad.videoId, pendingLoad.seek, false);
+        pendingLoad = null;
+      }
+    };
+
+    function onAutoplayBlocked() {
+      showOverlay('Click the player to start playback. The embedded browser blocked autoplay with audio.');
+    }
+
+    function onPlayerError(videoId, e) {
+      const code = e && typeof e.data !== 'undefined' ? String(e.data) : 'unknown';
+      if (videoId !== activeId) return;
+      if (code === '153') {
+        showOverlay('YouTube rejected the embedded player configuration (error 153).');
+        return;
+      }
+      if (lastLoad && retryCount < 20) {
+        retryCount += 1;
+        const waitMs = retryCount < 4 ? 5000 : 15000;
+        showOverlay('YouTube says this VOD is not embeddable yet (error ' + code
+          + '). Retrying in ' + Math.round(waitMs / 1000) + 's...');
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          if (lastLoad) doLoad(lastLoad.videoId, lastLoad.seek, true);
+        }, waitMs);
+        return;
+      }
+      showOverlay('This VOD is unavailable in the embedded player (YouTube error '
+        + code + '). It may still be processing, private, or embedding may still be disabled.');
+    }
+
+    function onStateChange(videoId, e) {
+      if (videoId !== activeId) return;
+      if (e.data === YT.PlayerState.PLAYING) {
+        retryCount = 0;
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        showOverlay(null);
+        startReporting();
+      } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
+        stopReporting();
+      }
+    }
+
+    function startReporting() {
+      if (reportTimer) return;
+      reportTimer = setInterval(() => {
+        const slot = slotFor(activeId);
+        if (bridge && slot && slot.player && slot.player.getCurrentTime) {
+          try { bridge.onTimeUpdate(slot.player.getCurrentTime() || 0); } catch (_) {}
+        }
+      }, 200);
+    }
+    function stopReporting() {
+      if (reportTimer) { clearInterval(reportTimer); reportTimer = null; }
+    }
+
+    function doLoad(videoId, seek, isRetry) {
+      if (!videoId) { showOverlay('Select a VOD to watch'); return; }
+      const start = Math.max(0, Number(seek || 0));
+      if (!apiReady || typeof YT === 'undefined' || !YT.Player) {
+        pendingLoad = { videoId, seek: start };
+        return;
+      }
+      if (!isRetry) {
+        retryCount = 0;
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      }
+      lastLoad = { videoId, seek: start };
+      showOverlay(null);
+      const slot = createPlayer(videoId, start, true);
+      setActive(videoId);
+      seekAndPlay(videoId, start);
+    }
+
+    function cacheVideos(ids) {
+      const list = normalizeIds(ids);
+      if (!apiReady || typeof YT === 'undefined' || !YT.Player) {
+        pendingCache = Array.from(new Set(pendingCache.concat(list)));
+        return;
+      }
+      list.forEach(id => {
+        if (id && id !== activeId) createPlayer(id, 0, false);
+      });
+    }
+
+    window.vodlink = {
+      loadVideo: function (videoId, seek) { doLoad(videoId, seek, false); },
+      seek: function (seconds) { seekAndPlay(activeId, Math.max(0, Number(seconds || 0))); },
+      play: function () { const s = slotFor(activeId); if (s && s.player) s.player.playVideo(); },
+      pause: function () { const s = slotFor(activeId); if (s && s.player) s.player.pauseVideo(); },
+      message: function (text) { showOverlay(text); },
+      cacheVideos: cacheVideos,
+    };
+
+    new QWebChannel(qt.webChannelTransport, function (channel) {
+      bridge = channel.objects.bridge;
+      if (bridge.loadRequested) bridge.loadRequested.connect(window.vodlink.loadVideo);
+      if (bridge.seekRequested) bridge.seekRequested.connect(window.vodlink.seek);
+      if (bridge.playRequested) bridge.playRequested.connect(window.vodlink.play);
+      if (bridge.pauseRequested) bridge.pauseRequested.connect(window.vodlink.pause);
+      if (bridge.messageRequested) bridge.messageRequested.connect(window.vodlink.message);
+      if (bridge.cacheRequested) bridge.cacheRequested.connect(window.vodlink.cacheVideos);
+      if (bridge.ready) bridge.ready();
+    });
+  </script>
+</body>
+</html>

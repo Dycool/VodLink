@@ -1,0 +1,15 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/">
+    <file>vodlink.png</file>
+    <file>vodlink.svg</file>
+    <file>check.svg</file>
+    <file>chevron-down.svg</file>
+    <file>chevron-up.svg</file>
+    <file>trash.svg</file>
+    <file>google.svg</file>
+  </qresource>
+  <qresource prefix="/player">
+    <file alias="player.html">player/player.html</file>
+  </qresource>
+</RCC>

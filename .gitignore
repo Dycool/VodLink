@@ -1,0 +1,24 @@
+/build/
+/.cache/
+/.qt/
+CMakeUserPresets.json
+*.user
+*.db
+*.mp4
+*.mkv
+
+aqtinstall.log
+
+# Cloudflare Worker
+worker/node_modules/
+worker/.wrangler/
+worker/dist-dry-run/
+worker/.dev.vars
+
+# Local/private config and OAuth material
+config.json
+.env
+*.secret.json
+client_secret*.json
+credentials.json
+token.json

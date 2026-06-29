@@ -1,0 +1,544 @@
+name: Build clients
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VODLINK_OBS_VERSION: 32.1.2
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows x64 static
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install build tools
+        shell: powershell
+        run: choco install ninja -y --no-progress
+
+      - name: Cache vcpkg build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg_installed
+            C:\Users\runneradmin\AppData\Local\vcpkg\archives
+          key: vcpkg-windows-static-v4-${{ hashFiles('CMakeLists.txt', 'cmake/**', '.github/workflows/build.yml') }}
+          restore-keys: |
+            vcpkg-windows-static-v4-
+
+      - name: Install static dependencies
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          vcpkg install `
+            qtbase:x64-windows-static `
+            qtnetworkauth:x64-windows-static `
+            qtwebchannel:x64-windows-static `
+            qtwebengine:x64-windows-static
+
+      - name: Cache OBS release downloads
+        uses: actions/cache@v4
+        with:
+          path: .ci/obs-cache
+          key: obs-${{ runner.os }}-${{ env.VODLINK_OBS_VERSION }}
+
+      - name: Prepare private OBS runtime
+        shell: powershell
+        run: scripts/ci/prepare-obs-runtime.ps1
+
+      - name: Configure
+        shell: powershell
+        env:
+          VODLINK_GOOGLE_CLIENT_ID: ${{ secrets.VODLINK_GOOGLE_CLIENT_ID }}
+          VODLINK_WORKER_URL: ${{ secrets.VODLINK_WORKER_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $clientId = $env:VODLINK_GOOGLE_CLIENT_ID
+          if ([string]::IsNullOrWhiteSpace($clientId)) {
+            $clientId = "dev-google-client-id"
+          }
+
+          $workerUrl = $env:VODLINK_WORKER_URL
+          if ([string]::IsNullOrWhiteSpace($workerUrl)) {
+            $workerUrl = "https://example.invalid"
+          }
+
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/stage" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DLIBOBS_ROOT="$env:LIBOBS_ROOT" `
+            -DLIBOBS_INCLUDE_DIR="$env:LIBOBS_INCLUDE_DIR" `
+            -DLIBOBS_LIBRARY="$env:LIBOBS_LIBRARY" `
+            -DLIBOBS_RUNTIME_LIBRARY="$env:LIBOBS_RUNTIME_LIBRARY" `
+            -DVODLINK_OBS_RUNTIME_DIR="$env:VODLINK_OBS_RUNTIME_DIR" `
+            -DVODLINK_GOOGLE_CLIENT_ID="$clientId" `
+            -DVODLINK_WORKER_URL="$workerUrl" `
+            -DVODLINK_SKIP_QT_DEPLOY=ON
+
+      - name: Build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build build --config Release --parallel
+
+      - name: Install
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --install build --config Release
+
+      - name: Verify single-exe artifact
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $app = Get-ChildItem -Path (Join-Path $env:GITHUB_WORKSPACE 'stage') -Recurse -Filter 'vodlink.exe' | Select-Object -First 1
+          if (-not $app) {
+            $app = Get-ChildItem -Path (Join-Path $env:GITHUB_WORKSPACE 'build') -Recurse -Filter 'vodlink.exe' | Select-Object -First 1
+          }
+          if (-not $app) {
+            throw 'Could not find vodlink.exe after build/install.'
+          }
+
+          Copy-Item $app.FullName (Join-Path $dist 'VodLink.exe') -Force
+
+          $forbidden = Get-ChildItem -Path $dist -Recurse | Where-Object { $_.Name -ne 'VodLink.exe' }
+          if ($forbidden) {
+            throw 'Windows artifact must contain only VodLink.exe.'
+          }
+
+          $deps = & dumpbin /dependents (Join-Path $dist 'VodLink.exe')
+          $bad = $deps | Select-String -Pattern 'Qt6|avcodec|avformat|avutil|swscale|ffmpeg|vcruntime|msvcp' -CaseSensitive:$false
+          if ($bad) {
+            throw "VodLink.exe still depends on non-system runtime DLLs:`n$bad"
+          }
+
+      - name: Upload client
+        uses: actions/upload-artifact@v4
+        with:
+          name: vodlink-windows-x64-static
+          path: dist/VodLink.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew/downloads
+            ~/Library/Caches/Homebrew/api
+          key: homebrew-macos-vodlink-v3
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja ccache pkg-config
+
+      - name: Cache C++ compiler outputs
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-macos-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-macos-${{ github.ref_name }}-
+            ccache-macos-
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.9.3
+          modules: qtnetworkauth qtwebengine qtwebchannel qtpositioning
+          cache: true
+          setup-python: true
+
+      - name: Cache OBS release downloads
+        uses: actions/cache@v4
+        with:
+          path: .ci/obs-cache
+          key: obs-${{ runner.os }}-${{ runner.arch }}-${{ env.VODLINK_OBS_VERSION }}
+
+      - name: Prepare private OBS runtime
+        shell: bash
+        run: bash scripts/ci/prepare-obs-runtime.sh
+
+      - name: Configure
+        shell: bash
+        env:
+          VODLINK_GOOGLE_CLIENT_ID: ${{ secrets.VODLINK_GOOGLE_CLIENT_ID }}
+          VODLINK_WORKER_URL: ${{ secrets.VODLINK_WORKER_URL }}
+        run: |
+          set -euo pipefail
+
+          CLIENT_ID="${VODLINK_GOOGLE_CLIENT_ID:-dev-google-client-id}"
+          WORKER_URL="${VODLINK_WORKER_URL:-https://example.invalid}"
+
+          if [[ ! -d "${LIBOBS_ROOT:-}" || ! -d "${VODLINK_OBS_RUNTIME_DIR:-}" ]]; then
+            echo "Private OBS runtime preparation did not export valid paths." >&2
+            exit 1
+          fi
+
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/stage" \
+            -DLIBOBS_ROOT="$LIBOBS_ROOT" \
+            -DLIBOBS_INCLUDE_DIR="$LIBOBS_INCLUDE_DIR" \
+            -DLIBOBS_LIBRARY="$LIBOBS_LIBRARY" \
+            -DVODLINK_OBS_RUNTIME_DIR="$VODLINK_OBS_RUNTIME_DIR" \
+            -DVODLINK_GOOGLE_CLIENT_ID="$CLIENT_ID" \
+            -DVODLINK_WORKER_URL="$WORKER_URL" \
+            -DVODLINK_SKIP_QT_DEPLOY=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --config Release --parallel
+
+      - name: Install
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --install build --config Release
+
+      - name: Deploy, local codesign and zip macOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$(find stage build -type d \( -name 'VodLink.app' -o -name 'vodlink.app' \) | head -n 1 || true)"
+          if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
+            echo "Could not find macOS .app bundle."
+            find stage build -maxdepth 5 -print || true
+            exit 1
+          fi
+
+          mkdir -p dist
+
+          rm -rf dist/VodLink.app
+          cp -a "$APP_PATH" dist/VodLink.app
+          APP_PATH="dist/VodLink.app"
+
+          QT_PLUGIN_DIR="${QT_ROOT_DIR:-}"
+          if [[ -n "$QT_PLUGIN_DIR" && -d "$QT_PLUGIN_DIR/plugins" ]]; then
+            QT_PLUGIN_DIR="$QT_PLUGIN_DIR/plugins"
+          else
+            QT_PLUGIN_DIR="$(qtpaths --plugin-dir)"
+          fi
+
+          SQL_PLUGIN_DIR="$QT_PLUGIN_DIR/sqldrivers"
+          if [[ -d "$SQL_PLUGIN_DIR" ]]; then
+            chmod -R u+w "$SQL_PLUGIN_DIR" || true
+            find "$SQL_PLUGIN_DIR" -type f -name 'libqsql*.dylib' ! -name 'libqsqlite.dylib' -print -delete || true
+            echo "Remaining Qt SQL drivers available to macdeployqt:"
+            find "$SQL_PLUGIN_DIR" -maxdepth 1 -type f -name '*.dylib' -print || true
+          fi
+
+          macdeployqt "$APP_PATH" -verbose=1
+
+          APP_SQL_DIR="$APP_PATH/Contents/PlugIns/sqldrivers"
+          if [[ -d "$APP_SQL_DIR" ]]; then
+            find "$APP_SQL_DIR" -type f -name '*.dylib' ! -name 'libqsqlite.dylib' -print -delete || true
+          fi
+
+          OBS_APP_RUNTIME="$APP_PATH/Contents/Frameworks/obs-runtime"
+          if [[ ! -d "$OBS_APP_RUNTIME" ]]; then
+            if [[ -z "${VODLINK_OBS_RUNTIME_DIR:-}" || ! -d "${VODLINK_OBS_RUNTIME_DIR:-}" ]]; then
+              echo "OBS runtime missing from .app and VODLINK_OBS_RUNTIME_DIR is not available." >&2
+              exit 1
+            fi
+            mkdir -p "$OBS_APP_RUNTIME"
+            cp -a "$VODLINK_OBS_RUNTIME_DIR/." "$OBS_APP_RUNTIME/"
+          fi
+
+          if ! find "$OBS_APP_RUNTIME" -type f \( -name 'libobs*.dylib' -o -name 'obs.dll' -o -name 'libobs*.so*' \) | grep -q .; then
+            echo "Bundled OBS runtime does not appear to contain libobs: $OBS_APP_RUNTIME" >&2
+            find "$OBS_APP_RUNTIME" -maxdepth 3 -type f | head -100 >&2 || true
+            exit 1
+          fi
+
+          echo "Bundled OBS runtime inside .app:"
+          find "$OBS_APP_RUNTIME" -maxdepth 3 -type d | sed -n '1,60p'
+          otool -l "$APP_PATH/Contents/MacOS/vodlink" 2>/dev/null | awk '/LC_RPATH/{show=1} show && /path/{print; show=0}' || true
+
+          mkdir -p "$APP_PATH/Contents/Resources"
+          cat > "$APP_PATH/Contents/Resources/qt.conf" <<'EOF'
+          [Paths]
+          Plugins = PlugIns
+          EOF
+
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          rm -f dist/VodLink.app.zip
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" dist/VodLink.app.zip
+
+          ls -lh dist/VodLink.app.zip
+
+      - name: Upload client
+        uses: actions/upload-artifact@v4
+        with:
+          name: vodlink-macos
+          path: dist/VodLink.app.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            ccache ninja-build pkg-config wget curl ca-certificates file desktop-file-utils imagemagick \
+            libfuse2 \
+            libgl1-mesa-dev libxkbcommon-dev \
+            libavcodec60 libavformat60 libavutil58 libswscale7 libswresample4
+
+      - name: Cache C++ compiler outputs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-${{ github.ref_name }}-
+            ccache-linux-
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.9.3
+          modules: qtnetworkauth qtwebengine qtwebchannel qtpositioning
+          cache: true
+          setup-python: true
+
+      - name: Cache OBS release downloads
+        uses: actions/cache@v4
+        with:
+          path: .ci/obs-cache
+          key: obs-${{ runner.os }}-${{ runner.arch }}-${{ env.VODLINK_OBS_VERSION }}
+
+      - name: Prepare private OBS runtime
+        shell: bash
+        run: bash scripts/ci/prepare-obs-runtime.sh
+
+      - name: Configure
+        shell: bash
+        env:
+          VODLINK_GOOGLE_CLIENT_ID: ${{ secrets.VODLINK_GOOGLE_CLIENT_ID }}
+          VODLINK_WORKER_URL: ${{ secrets.VODLINK_WORKER_URL }}
+        run: |
+          set -euo pipefail
+
+          CLIENT_ID="${VODLINK_GOOGLE_CLIENT_ID:-dev-google-client-id}"
+          WORKER_URL="${VODLINK_WORKER_URL:-https://example.invalid}"
+
+          if [[ ! -d "${LIBOBS_ROOT:-}" || ! -d "${VODLINK_OBS_RUNTIME_DIR:-}" ]]; then
+            echo "Private OBS runtime preparation did not export valid paths." >&2
+            exit 1
+          fi
+
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/stage" \
+            -DLIBOBS_ROOT="$LIBOBS_ROOT" \
+            -DLIBOBS_INCLUDE_DIR="$LIBOBS_INCLUDE_DIR" \
+            -DLIBOBS_LIBRARY="$LIBOBS_LIBRARY" \
+            -DVODLINK_OBS_RUNTIME_DIR="$VODLINK_OBS_RUNTIME_DIR" \
+            -DVODLINK_GOOGLE_CLIENT_ID="$CLIENT_ID" \
+            -DVODLINK_WORKER_URL="$WORKER_URL" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --config Release --parallel
+
+      - name: Install
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --install build --config Release
+
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf dist AppDir linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+          mkdir -p dist AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+
+          APP_BIN="$(find stage build -type f \( -name 'vodlink' -o -name 'VodLink' \) -perm -111 | head -n 1 || true)"
+          if [[ -z "$APP_BIN" ]]; then
+            echo "Could not find Linux executable."
+            find stage build -maxdepth 5 -print || true
+            exit 1
+          fi
+
+          cp "$APP_BIN" AppDir/usr/bin/VodLink
+          chmod +x AppDir/usr/bin/VodLink
+
+          OBS_RUNTIME_SOURCE="$(find stage -type d -name 'obs-runtime' | head -n 1 || true)"
+          if [[ -z "$OBS_RUNTIME_SOURCE" ]]; then
+            OBS_RUNTIME_SOURCE="${VODLINK_OBS_RUNTIME_DIR:-}"
+          fi
+          if [[ -z "$OBS_RUNTIME_SOURCE" || ! -d "$OBS_RUNTIME_SOURCE" ]]; then
+            echo "Could not find the private OBS runtime to embed in the AppImage." >&2
+            exit 1
+          fi
+
+          mkdir -p AppDir/usr/bin/obs-runtime
+          cp -a "$OBS_RUNTIME_SOURCE/." AppDir/usr/bin/obs-runtime/
+
+          if ! find AppDir/usr/bin/obs-runtime -type f \( -name 'libobs*.so*' -o -name 'obs.dll' -o -name 'libobs*.dylib' \) | grep -q .; then
+            echo "Bundled OBS runtime does not appear to contain libobs." >&2
+            find AppDir/usr/bin/obs-runtime -maxdepth 3 -type f | head -100 >&2 || true
+            exit 1
+          fi
+
+          cat > AppDir/AppRun <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          HERE="$(dirname "$(readlink -f "$0")")"
+          OBS_RUNTIME="$HERE/usr/bin/obs-runtime"
+          export LD_LIBRARY_PATH="$OBS_RUNTIME/bin:$OBS_RUNTIME/lib:$OBS_RUNTIME/lib64:$OBS_RUNTIME/usr/lib:$OBS_RUNTIME/usr/lib/x86_64-linux-gnu:$OBS_RUNTIME/usr/lib/aarch64-linux-gnu:$OBS_RUNTIME/usr/local/lib:$OBS_RUNTIME/usr/local/lib/x86_64-linux-gnu:$OBS_RUNTIME/usr/local/lib/aarch64-linux-gnu:$OBS_RUNTIME:$OBS_RUNTIME/obs-plugins:$OBS_RUNTIME/obs-plugins/64bit:$OBS_RUNTIME/plugins:$OBS_RUNTIME/plugins/64bit:$OBS_RUNTIME/usr/lib/x86_64-linux-gnu/obs-plugins:$OBS_RUNTIME/usr/lib/aarch64-linux-gnu/obs-plugins:${LD_LIBRARY_PATH:-}"
+          exec "$HERE/usr/bin/VodLink" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          echo "Bundled OBS runtime inside AppImage payload:"
+          find AppDir/usr/bin/obs-runtime -maxdepth 3 -type d | sed -n '1,80p'
+
+          ICON_SOURCE="$(find resources -type f \( -iname 'vodlink.png' -o -iname 'VodLink.png' -o -iname 'icon.png' \) | head -n 1 || true)"
+          if [[ -z "$ICON_SOURCE" ]]; then
+            echo "Could not find a PNG icon in resources."
+            find resources -maxdepth 4 -type f -print || true
+            exit 1
+          fi
+
+          convert "$ICON_SOURCE" -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/vodlink.png
+          cp AppDir/usr/share/icons/hicolor/256x256/apps/vodlink.png AppDir/vodlink.png
+
+          identify AppDir/usr/share/icons/hicolor/256x256/apps/vodlink.png
+
+          cat > AppDir/usr/share/applications/vodlink.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=VodLink
+          Exec=VodLink
+          Icon=vodlink
+          Categories=AudioVideo;Recorder;
+          Terminal=false
+          EOF
+
+          cp AppDir/usr/share/applications/vodlink.desktop AppDir/vodlink.desktop
+
+          QT_PLUGIN_DIR="${QT_ROOT_DIR}/plugins"
+          if [[ ! -d "$QT_PLUGIN_DIR" ]]; then
+            echo "QT_ROOT_DIR/plugins not found: $QT_PLUGIN_DIR"
+            exit 1
+          fi
+
+          if [[ -d "$QT_PLUGIN_DIR/sqldrivers" ]]; then
+            chmod -R u+w "$QT_PLUGIN_DIR/sqldrivers" || true
+            find "$QT_PLUGIN_DIR/sqldrivers" -type f -name 'libqsql*.so' ! -name 'libqsqlite.so' -print -delete || true
+            echo "Remaining Qt SQL drivers:"
+            find "$QT_PLUGIN_DIR/sqldrivers" -maxdepth 1 -type f -print || true
+          fi
+
+          # VodLink does not use Qt location/GPS plugins. linuxdeploy's Qt plugin
+          # tries to deploy all Qt Positioning plugins when they are present, and
+          # the NMEA/geoclue plugins pull libQt6SerialPort/geoclue dependencies
+          # that are irrelevant for VodLink and broke the AppImage build.
+          rm -rf "$QT_PLUGIN_DIR/position" "$QT_PLUGIN_DIR/positioning" || true
+
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage -O linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage -O linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+
+          export QMAKE="${QT_ROOT_DIR}/bin/qmake"
+          export QML_SOURCES_PATHS=
+          export EXTRA_QT_PLUGINS="platforms/libqxcb.so;sqldrivers/libqsqlite.so;imageformats/libqico.so;imageformats/libqpng.so;tls/libqopensslbackend.so"
+
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/VodLink \
+            --desktop-file AppDir/usr/share/applications/vodlink.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/vodlink.png \
+            --plugin qt \
+            --output appimage
+
+          APPIMAGE="./VodLink-x86_64.AppImage"
+          if [[ ! -f "$APPIMAGE" ]]; then
+            echo "Expected VodLink AppImage was not generated: $APPIMAGE" >&2
+            echo "Available AppImages:" >&2
+            find . -maxdepth 1 -type f -name '*.AppImage' -ls >&2 || true
+            exit 1
+          fi
+
+          rm -rf dist
+          mkdir -p dist
+          cp -f "$APPIMAGE" dist/VodLink.AppImage
+          chmod +x dist/VodLink.AppImage
+
+          ls -lh "$APPIMAGE" dist/VodLink.AppImage
+          file dist/VodLink.AppImage
+          # Guard against accidentally uploading linuxdeploy itself or the Qt plugin.
+          test "$(stat -c%s dist/VodLink.AppImage)" -gt 100000000
+          ./dist/VodLink.AppImage --appimage-extract >/dev/null
+          test -d squashfs-root/usr/bin/obs-runtime
+          rm -rf squashfs-root
+
+      - name: Upload client
+        uses: actions/upload-artifact@v4
+        with:
+          name: vodlink-linux-x64
+          path: dist/VodLink.AppImage
+          if-no-files-found: error
+          retention-days: 14

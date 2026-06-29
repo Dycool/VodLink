@@ -1,0 +1,206 @@
+name: Windows Dynamic Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "resources/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/windows-dynamic-build.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "resources/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/windows-dynamic-build.yml"
+
+permissions:
+  contents: read
+
+env:
+  VODLINK_OBS_VERSION: 32.1.2
+
+concurrency:
+  group: windows-dynamic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-dynamic:
+    name: Windows x64 dynamic package
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja -y --no-progress
+
+      - name: Install Qt dynamic
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.9.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtnetworkauth qtwebengine qtwebchannel qtpositioning
+          cache: true
+          setup-python: true
+
+      - name: Cache OBS release downloads
+        uses: actions/cache@v4
+        with:
+          path: .ci/obs-cache
+          key: obs-${{ runner.os }}-${{ env.VODLINK_OBS_VERSION }}
+
+      - name: Prepare private OBS runtime
+        shell: pwsh
+        run: scripts/ci/prepare-obs-runtime.ps1
+
+      - name: Configure
+        shell: pwsh
+        env:
+          VODLINK_GOOGLE_CLIENT_ID: ${{ secrets.VODLINK_GOOGLE_CLIENT_ID }}
+          VODLINK_GOOGLE_CLIENT_SECRET: ${{ secrets.VODLINK_GOOGLE_CLIENT_SECRET }}
+          VODLINK_WORKER_URL: ${{ secrets.VODLINK_WORKER_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $clientId = $env:VODLINK_GOOGLE_CLIENT_ID
+          if ([string]::IsNullOrWhiteSpace($clientId)) {
+            $clientId = "dev-google-client-id"
+          }
+
+          $clientSecret = $env:VODLINK_GOOGLE_CLIENT_SECRET
+          if ($null -eq $clientSecret) {
+            $clientSecret = ""
+          }
+
+          $workerUrl = $env:VODLINK_WORKER_URL
+          if ([string]::IsNullOrWhiteSpace($workerUrl)) {
+            $workerUrl = "https://example.invalid"
+          }
+
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/stage" `
+            -DLIBOBS_ROOT="$env:LIBOBS_ROOT" `
+            -DLIBOBS_INCLUDE_DIR="$env:LIBOBS_INCLUDE_DIR" `
+            -DLIBOBS_LIBRARY="$env:LIBOBS_LIBRARY" `
+            -DLIBOBS_RUNTIME_LIBRARY="$env:LIBOBS_RUNTIME_LIBRARY" `
+            -DVODLINK_OBS_RUNTIME_DIR="$env:VODLINK_OBS_RUNTIME_DIR" `
+            -DCMAKE_PREFIX_PATH="$env:LIBOBS_ROOT;$env:QT_ROOT_DIR" `
+            -DVODLINK_GOOGLE_CLIENT_ID="$clientId" `
+            -DVODLINK_GOOGLE_CLIENT_SECRET="$clientSecret" `
+            -DVODLINK_WORKER_URL="$workerUrl"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build build --config Release --parallel
+
+      - name: Deploy dynamic runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $exe = Get-ChildItem build -Recurse -Filter "vodlink.exe" | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "vodlink.exe not found. Build tree:"
+            Get-ChildItem build -Recurse | Select-Object FullName
+            exit 1
+          }
+
+          Copy-Item $exe.FullName (Join-Path $dist 'VodLink.exe') -Force
+
+          # OBS hardware encoder plugins launch these crash-isolated probes via
+          # os_get_executable_path_ptr(), so they must be beside VodLink.exe;
+          # embedding them only in the private AppData runtime is not enough.
+          $encoderHelpers = @(
+            'obs-nvenc-test.exe',
+            'obs-qsv-test.exe',
+            'obs-amf-test.exe'
+          )
+          $copiedSidecars = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+          $sidecarQueue = [System.Collections.Generic.Queue[string]]::new()
+          foreach ($helper in $encoderHelpers) {
+            $source = Join-Path $env:VODLINK_OBS_RUNTIME_DIR (Join-Path 'bin\64bit' $helper)
+            if (!(Test-Path $source)) {
+              throw "Required OBS encoder probe is missing: $source"
+            }
+            Copy-Item $source (Join-Path $dist $helper) -Force
+            $sidecarQueue.Enqueue($source)
+            [void]$copiedSidecars.Add($helper)
+          }
+
+          # Copy non-system DLL dependencies of the probe helpers beside them.
+          # This is normally only the QSV/VPL runtime, but walk the small direct
+          # dependency closure so an OBS point release cannot make it incomplete.
+          while ($sidecarQueue.Count -gt 0) {
+            $sidecar = $sidecarQueue.Dequeue()
+            $dependencies = & dumpbin /dependents $sidecar 2>$null
+            foreach ($line in $dependencies) {
+              if ($line -notmatch '^\s*([A-Za-z0-9_.+-]+\.dll)\s*$') { continue }
+              $dependency = $Matches[1]
+              if ($dependency -match '^(api-ms-|ext-ms-|kernel32|user32|gdi32|advapi32|shell32|ole32|oleaut32|uuid|ws2_32|bcrypt|crypt32|secur32|shlwapi|version|winmm|dwmapi|d3d11|d3d12|dxgi|dxguid|mf|mfplat|mfreadwrite|propsys|setupapi|cfgmgr32|ntdll|ucrtbase|vcruntime|msvcp)') { continue }
+              if ($copiedSidecars.Contains($dependency)) { continue }
+              $dependencySource = Get-ChildItem -Path $env:VODLINK_OBS_RUNTIME_DIR -Recurse -File -Filter $dependency -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($dependencySource) {
+                Copy-Item $dependencySource.FullName (Join-Path $dist $dependency) -Force
+                [void]$copiedSidecars.Add($dependency)
+                $sidecarQueue.Enqueue($dependencySource.FullName)
+              }
+            }
+          }
+
+          $windeployqt = Join-Path $env:QT_ROOT_DIR 'bin\windeployqt.exe'
+          if (!(Test-Path $windeployqt)) {
+            throw "windeployqt not found at $windeployqt"
+          }
+
+          & $windeployqt `
+            --release `
+            --compiler-runtime `
+            --no-translations `
+            --no-system-d3d-compiler `
+            --no-opengl-sw `
+            (Join-Path $dist 'VodLink.exe')
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Dynamic package contents:"
+          Get-ChildItem $dist -Recurse | Select-Object FullName
+
+      - name: Show binary dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dumpbin /dependents "$env:GITHUB_WORKSPACE\dist\VodLink.exe"
+
+      - name: Upload dynamic package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vodlink-windows-x64-libobs-package
+          path: dist/**
+          if-no-files-found: error
+          retention-days: 3
