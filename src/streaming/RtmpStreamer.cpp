@@ -43,6 +43,7 @@ extern "C" {
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
 #endif
+#include <windows.h>
 #include <wrl/client.h>
 #include <dxgi1_6.h>
 #endif
@@ -85,15 +86,15 @@ QString qstr(const char *value)
 QString captureModeName(RtmpStreamer::CaptureMode mode)
 {
     return mode == RtmpStreamer::CaptureMode::FullDesktop
-               ? QStringLiteral("FullDesktop")
-               : QStringLiteral("GameWindow");
+               ? QStringLiteral("Desktop")
+               : QStringLiteral("FocusGatedDesktop");
 }
 
 QString audioSourceName(RtmpStreamer::AudioCaptureSource source)
 {
     return source == RtmpStreamer::AudioCaptureSource::GameOnly
-               ? QStringLiteral("GameOnlyBeta")
-               : QStringLiteral("System");
+               ? QStringLiteral("GameOnly")
+               : QStringLiteral("SystemWithMic");
 }
 
 QString obsLogLevelName(int level)
@@ -277,24 +278,16 @@ bool splitRtmpUrl(const QUrl &url, QString *server, QString *key)
 
 QStringList videoSourceCandidates(RtmpStreamer::CaptureMode mode)
 {
+    Q_UNUSED(mode);
 #if defined(Q_OS_WIN)
-    // Use the least invasive OBS path first when a real window selector exists.
-    // Some anti-cheat games render black through Game Capture even though OBS'
-    // Windows Graphics Capture window source works normally.  Game Capture stays
-    // as the fallback for exclusive fullscreen / not-yet-listed windows.
-    if (mode == RtmpStreamer::CaptureMode::GameWindow) {
-        return {QStringLiteral("window_capture"), QStringLiteral("game_capture")};
-    }
+    // Game privacy modes intentionally use desktop capture too. OBS Game Capture
+    // is the path that frequently goes black with anti-cheat titles / GPU
+    // mismatch. Privacy is enforced by a black focus gate on top of the desktop
+    // source instead of by trying to hook the game renderer.
     return {QStringLiteral("monitor_capture")};
 #elif defined(Q_OS_MACOS) || defined(Q_OS_MAC)
-    if (mode == RtmpStreamer::CaptureMode::GameWindow) {
-        return {QStringLiteral("screen_capture"), QStringLiteral("window_capture"), QStringLiteral("display_capture")};
-    }
     return {QStringLiteral("screen_capture"), QStringLiteral("display_capture")};
 #else
-    if (mode == RtmpStreamer::CaptureMode::GameWindow) {
-        return {QStringLiteral("pipewire-desktop-capture-source"), QStringLiteral("xcomposite_input"), QStringLiteral("xshm_input")};
-    }
     return {QStringLiteral("pipewire-desktop-capture-source"), QStringLiteral("xshm_input")};
 #endif
 }
@@ -329,7 +322,7 @@ QStringList audioSourceCandidates(RtmpStreamer::AudioCaptureSource source)
 QStringList microphoneSourceCandidates(RtmpStreamer::AudioCaptureSource source)
 {
     // Only the modes that intentionally include external/system audio should
-    // include the default microphone. Keep Game only (Beta) as app-audio-only.
+    // include the default microphone. Game-only audio stays app-audio-only.
     if (source == RtmpStreamer::AudioCaptureSource::GameOnly) {
         return {};
     }
@@ -910,8 +903,10 @@ ObsDataPtr makeVideoSourceSettings(const QString &sourceId, RtmpStreamer::Captur
             obs_data_set_string(settings.get(), "monitor_id", monitor.constData());
         }
     } else if (sourceId == QStringLiteral("screen_capture")) {
-        obs_data_set_string(settings.get(), "type", mode == RtmpStreamer::CaptureMode::GameWindow
-                                            ? "window_capture" : "display_capture");
+        // Both game privacy modes and desktop modes capture the display. Game
+        // modes get their privacy from the focus-gate overlay, not from window
+        // capture. This avoids the black-frame path seen with game/window hooks.
+        obs_data_set_string(settings.get(), "type", "display_capture");
         obs_data_set_bool(settings.get(), "show_cursor", true);
         obs_data_set_bool(settings.get(), "capture_audio", audioSource == RtmpStreamer::AudioCaptureSource::GameOnly);
     } else if (sourceId == QStringLiteral("display_capture")) {
@@ -1426,14 +1421,14 @@ bool loadVodLinkObsModules(const ObsRuntime &runtime, QString *error)
     return true;
 }
 
-bool addSourceToScene(obs_scene_t *scene, obs_source_t *source, const QSize &canvasSize)
+obs_sceneitem_t *addSourceToSceneItem(obs_scene_t *scene, obs_source_t *source, const QSize &canvasSize)
 {
     if (scene == nullptr || source == nullptr) {
-        return false;
+        return nullptr;
     }
     obs_sceneitem_t *item = obs_scene_add(scene, source);
     if (item == nullptr) {
-        return false;
+        return nullptr;
     }
     struct vec2 bounds = {};
     bounds.x = static_cast<float>(canvasSize.width());
@@ -1448,7 +1443,12 @@ bool addSourceToScene(obs_scene_t *scene, obs_source_t *source, const QSize &can
     // obs_scene_add() returns the scene-owned item without incrementing its
     // reference. Releasing it here destroys the item while it remains linked
     // from the scene, causing a use-after-free when the canvas is activated.
-    return true;
+    return item;
+}
+
+bool addSourceToScene(obs_scene_t *scene, obs_source_t *source, const QSize &canvasSize)
+{
+    return addSourceToSceneItem(scene, source, canvasSize) != nullptr;
 }
 
 bool currentObsVideoInfoForCanvas(const QSize &canvasSize, int fps, VideoColorMode colorMode,
@@ -1502,6 +1502,95 @@ bool currentObsVideoInfoForCanvas(const QSize &canvasSize, int fps, VideoColorMo
     return true;
 }
 
+
+ObsDataPtr makeBlackOverlaySettings(const QSize &canvasSize)
+{
+    ObsDataPtr settings(obs_data_create());
+    obs_data_set_int(settings.get(), "width", canvasSize.width());
+    obs_data_set_int(settings.get(), "height", canvasSize.height());
+    obs_data_set_int(settings.get(), "color", 0xFF000000);
+    return settings;
+}
+
+QString normalizedHintExecutable(const QString &hint)
+{
+    QString value = hint.trimmed().toLower();
+    if (value.isEmpty()) {
+        return {};
+    }
+    value = QFileInfo(value).fileName().toLower();
+    if (!value.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) {
+        return {};
+    }
+    return value;
+}
+
+#if defined(Q_OS_WIN)
+bool foregroundMatchesWindowHints(const QStringList &windowHints, QString *details)
+{
+    HWND window = GetForegroundWindow();
+    if (window == nullptr) {
+        if (details != nullptr) {
+            *details = QStringLiteral("no foreground window");
+        }
+        return false;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid == 0) {
+        if (details != nullptr) {
+            *details = QStringLiteral("foreground window has no process id");
+        }
+        return false;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (process == nullptr) {
+        if (details != nullptr) {
+            *details = QStringLiteral("cannot open foreground process");
+        }
+        return false;
+    }
+    wchar_t path[MAX_PATH] = {0};
+    DWORD size = MAX_PATH;
+    const bool gotPath = QueryFullProcessImageNameW(process, 0, path, &size) != 0;
+    CloseHandle(process);
+    if (!gotPath) {
+        if (details != nullptr) {
+            *details = QStringLiteral("cannot read foreground process path");
+        }
+        return false;
+    }
+
+    const QString foregroundExe = QFileInfo(QString::fromWCharArray(path, static_cast<int>(size))).fileName().toLower();
+    QStringList executableHints;
+    for (const QString &hint : windowHints) {
+        const QString exe = normalizedHintExecutable(hint);
+        if (!exe.isEmpty() && !executableHints.contains(exe)) {
+            executableHints.append(exe);
+        }
+    }
+
+    const bool matched = executableHints.contains(foregroundExe);
+    if (details != nullptr) {
+        *details = QStringLiteral("foreground=%1 hints=[%2]")
+                       .arg(foregroundExe.isEmpty() ? QStringLiteral("<empty>") : foregroundExe,
+                            executableHints.isEmpty() ? QStringLiteral("none") : executableHints.join(QStringLiteral(", ")));
+    }
+    return matched;
+}
+#else
+bool foregroundMatchesWindowHints(const QStringList &windowHints, QString *details)
+{
+    Q_UNUSED(windowHints);
+    if (details != nullptr) {
+        *details = QStringLiteral("focus gate unsupported on this platform; leaving desktop visible");
+    }
+    return true;
+}
+#endif
+
 void outputStoppedCallback(void *data, calldata_t *cd)
 {
     auto *streamer = static_cast<RtmpStreamer *>(data);
@@ -1517,6 +1606,8 @@ struct RtmpStreamer::ObsHandles
     obs_source_t *videoSource = nullptr;
     obs_source_t *audioSource = nullptr;
     obs_source_t *micSource = nullptr;
+    obs_source_t *focusOverlaySource = nullptr;
+    obs_sceneitem_t *focusOverlayItem = nullptr;
     obs_encoder_t *videoEncoder = nullptr;
     obs_encoder_t *audioEncoder = nullptr;
     obs_service_t *service = nullptr;
@@ -1535,6 +1626,9 @@ RtmpStreamer::RtmpStreamer(QObject *parent)
 {
     m_diagnosticsTimer.setInterval(2000);
     connect(&m_diagnosticsTimer, &QTimer::timeout, this, &RtmpStreamer::emitDiagnostics);
+
+    m_focusGateTimer.setInterval(250);
+    connect(&m_focusGateTimer, &QTimer::timeout, this, &RtmpStreamer::updateFocusGateOverlay);
 }
 
 RtmpStreamer::~RtmpStreamer()
@@ -1613,6 +1707,8 @@ bool RtmpStreamer::start(const QUrl &ingestUrl, CaptureMode mode, AudioCaptureSo
     m_startedSignalSent = false;
 
     m_colorMode = autoVideoColorMode(mode);
+    m_focusGateEnabled = mode == CaptureMode::GameWindow;
+    m_focusGateBlack = false;
     DebugLog::writeCategory(QStringLiteral("streamer"),
                             QStringLiteral("start begin ingest=%1 mode=%2 audio=%3 hints=[%4] colorMode=%5")
                                 .arg(redactedIngestDescription(ingestUrl), captureModeName(mode),
@@ -1689,6 +1785,7 @@ void RtmpStreamer::stop()
 
     m_stopping = true;
     m_diagnosticsTimer.stop();
+    m_focusGateTimer.stop();
 
     if (m_obs && m_obs->output != nullptr && obs_output_active(m_obs->output)) {
         // Do not force-stop a healthy RTMP output.  force_stop() tears the socket
@@ -1947,83 +2044,52 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
     if (audioSource == AudioCaptureSource::GameOnly
         && !registeredInputs.contains(QStringLiteral("wasapi_process_output_capture"))) {
         if (error != nullptr) {
-            *error = QStringLiteral("Game only (Beta) needs OBS Application Audio support (wasapi_process_output_capture), but VodLink's private OBS runtime did not register it. Rebuild the dynamic package with win-wasapi.dll and its data folder.");
+            *error = QStringLiteral("Game only needs OBS Application Audio support (wasapi_process_output_capture), but VodLink's private OBS runtime did not register it. Rebuild the dynamic package with win-wasapi.dll and its data folder.");
         }
         return false;
     }
 
-    if (mode == CaptureMode::GameWindow) {
-        // Prefer the exact title:class:exe value exposed by OBS. If a
-        // fullscreen game such as CS2 has started but its window is not listed
-        // yet, keep Game Capture in any_fullscreen mode and let Application
-        // Audio's reconnect loop resolve the already-detected executable.
-        QStringList selectorSources;
-        if (audioSource == AudioCaptureSource::GameOnly) {
-            selectorSources.append(QStringLiteral("wasapi_process_output_capture"));
-        }
-        if (registeredInputs.contains(QStringLiteral("window_capture"))) {
-            selectorSources.append(QStringLiteral("window_capture"));
-        }
-
+    if (audioSource == AudioCaptureSource::GameOnly) {
         QString diagnostic;
-        DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("window selector sources=[%1]").arg(selectorSources.join(QStringLiteral(", "))));
-        obsWindowSpec = resolveObsWindowSpecFromProperties(selectorSources, m_windowHints, &diagnostic);
-        obsAudioWindowSpec = obsWindowSpec;
-        DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("window selector result=%1 details=%2")
-                                .arg(obsWindowSpec.isEmpty() ? QStringLiteral("<empty>") : obsWindowSpec, diagnostic));
-        if (obsWindowSpec.isEmpty()) {
-            // Game detection can fire as soon as the process exists, before OBS'
-            // window lists have caught up.  Give WGC/window capture a short
-            // chance to bind before falling back to Game Capture any_fullscreen;
-            // that avoids the common black-frame path for anti-cheat games.
-            for (int attempt = 1; attempt <= 20 && obsWindowSpec.isEmpty(); ++attempt) {
-                QThread::msleep(250);
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-                QString retryDiagnostic;
-                obsWindowSpec = resolveObsWindowSpecFromProperties(selectorSources, m_windowHints, &retryDiagnostic);
-                if (!obsWindowSpec.isEmpty()) {
-                    obsAudioWindowSpec = obsWindowSpec;
-                    DebugLog::writeCategory(QStringLiteral("OBS"),
-                                            QStringLiteral("window selector resolved after retry %1: %2 details=%3")
-                                                .arg(attempt)
-                                                .arg(obsWindowSpec, retryDiagnostic));
-                    break;
-                }
-                diagnostic = retryDiagnostic;
+        const QStringList selectorSources = {QStringLiteral("wasapi_process_output_capture")};
+        DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("application-audio selector sources=[%1]").arg(selectorSources.join(QStringLiteral(", "))));
+        obsAudioWindowSpec = resolveObsWindowSpecFromProperties(selectorSources, m_windowHints, &diagnostic);
+        for (int attempt = 1; attempt <= 20 && obsAudioWindowSpec.isEmpty(); ++attempt) {
+            QThread::msleep(250);
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            QString retryDiagnostic;
+            obsAudioWindowSpec = resolveObsWindowSpecFromProperties(selectorSources, m_windowHints, &retryDiagnostic);
+            if (!obsAudioWindowSpec.isEmpty()) {
+                DebugLog::writeCategory(QStringLiteral("OBS"),
+                                        QStringLiteral("application-audio selector resolved after retry %1: %2 details=%3")
+                                            .arg(attempt)
+                                            .arg(obsAudioWindowSpec, retryDiagnostic));
+                break;
+            }
+            diagnostic = retryDiagnostic;
+        }
+        if (obsAudioWindowSpec.isEmpty()) {
+            obsAudioWindowSpec = obsProcessAudioSelectorFromExecutableHints(m_windowHints);
+            if (!obsAudioWindowSpec.isEmpty()) {
+                DebugLog::writeCategory(
+                    QStringLiteral("OBS"),
+                    QStringLiteral("Application Audio target not listed yet; binding by detected executable with selector '%1'")
+                        .arg(obsAudioWindowSpec));
             }
         }
-        if (obsWindowSpec.isEmpty()) {
-            if (audioSource == AudioCaptureSource::GameOnly) {
-                obsAudioWindowSpec = obsProcessAudioSelectorFromExecutableHints(m_windowHints);
-                if (!obsAudioWindowSpec.isEmpty()) {
-                    DebugLog::writeCategory(
-                        QStringLiteral("OBS"),
-                        QStringLiteral("Application Audio target not listed yet; binding by detected executable with selector '%1'")
-                            .arg(obsAudioWindowSpec));
-                }
+        if (obsAudioWindowSpec.isEmpty()) {
+            if (error != nullptr) {
+                *error = QStringLiteral("Game only could not identify the game's executable for OBS Application Audio. Add the game manually with its real .exe, or try Game and external audio. Details: %1")
+                             .arg(diagnostic);
             }
+            return false;
+        }
+    }
 
-            const bool canUseGameCaptureFullscreen =
-                registeredInputs.contains(QStringLiteral("game_capture"))
-                && (audioSource != AudioCaptureSource::GameOnly || !obsAudioWindowSpec.isEmpty());
-            if (!canUseGameCaptureFullscreen) {
-                if (error != nullptr) {
-                    *error = audioSource == AudioCaptureSource::GameOnly
-                                 ? QStringLiteral("Game only (Beta) could not identify the game's executable for OBS Application Audio. Add the game manually with its real .exe, or try Game and external audio. Details: %1")
-                                       .arg(diagnostic)
-                                 : QStringLiteral("OBS did not list a capturable game window and Game Capture is unavailable. VodLink refused to fall back to full desktop capture. Details: %1")
-                                       .arg(diagnostic);
-                }
-                return false;
-            }
-            DebugLog::writeCategory(QStringLiteral("OBS"),
-                                    QStringLiteral("window selector empty; using OBS game_capture any_fullscreen instead of desktop fallback"));
-        }
-    } else if (mode == CaptureMode::FullDesktop) {
-        // OBS monitor_capture does not use the old numeric "monitor" setting.
-        // Its real selector is the OBS-provided monitor_id property.  Leaving it
-        // unset makes OBS use the disabled DUMMY display, which was exactly what
-        // the crash log showed before obs_set_output_source activated the scene.
+    // Game modes also use desktop capture now; the visual privacy guarantee is
+    // the black focus gate, not a fragile game/window hook. Desktop modes use
+    // the same real monitor selector without the focus gate.
+    {
         QString diagnostic;
         obsMonitorId = resolveObsMonitorIdFromProperties(&diagnostic);
         DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("monitor selector result=%1 details=%2")
@@ -2043,14 +2109,6 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
             DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("video source %1 not registered").arg(sourceId));
             continue;
         }
-#if defined(Q_OS_WIN)
-        if (mode == CaptureMode::GameWindow && sourceId == QStringLiteral("window_capture")
-            && obsWindowSpec.isEmpty()) {
-            DebugLog::writeCategory(QStringLiteral("OBS"),
-                                    QStringLiteral("window_capture skipped because OBS did not expose a matching game window yet"));
-            continue;
-        }
-#endif
         ObsDataPtr settings = makeVideoSourceSettings(sourceId, mode, audioSource, m_colorMode, obsWindowSpec, obsMonitorId);
         const QByteArray id = utf8(sourceId);
         m_obs->videoSource = obs_source_create_private(id.constData(), "VodLink Video", settings.get());
@@ -2074,11 +2132,45 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
 
     if (m_obs->videoSource == nullptr) {
         if (error != nullptr) {
-            *error = mode == CaptureMode::GameWindow
-                         ? QStringLiteral("OBS could not create a game/window capture source from VodLink's private plugins.")
-                         : QStringLiteral("OBS could not create a desktop capture source from VodLink's private plugins.");
+            *error = QStringLiteral("OBS could not create a desktop capture source from VodLink's private plugins.");
         }
         return false;
+    }
+
+    if (mode == CaptureMode::GameWindow) {
+        QString overlayId;
+        for (const QString &candidate : {QStringLiteral("color_source_v3"),
+                                         QStringLiteral("color_source_v2"),
+                                         QStringLiteral("color_source")}) {
+            if (registeredInputs.contains(candidate)) {
+                overlayId = candidate;
+                break;
+            }
+        }
+        if (overlayId.isEmpty()) {
+            if (error != nullptr) {
+                *error = QStringLiteral("OBS did not register a color source, so VodLink cannot safely black out the desktop when the game is not focused.");
+            }
+            return false;
+        }
+        ObsDataPtr settings = makeBlackOverlaySettings(m_outputSize);
+        const QByteArray overlaySourceId = utf8(overlayId);
+        m_obs->focusOverlaySource = obs_source_create_private(overlaySourceId.constData(), "VodLink Focus Privacy Mask", settings.get());
+        m_obs->focusOverlayItem = addSourceToSceneItem(m_obs->scene, m_obs->focusOverlaySource, m_outputSize);
+        if (m_obs->focusOverlaySource == nullptr || m_obs->focusOverlayItem == nullptr) {
+            if (error != nullptr) {
+                *error = QStringLiteral("OBS could not create the Game privacy black-screen overlay.");
+            }
+            return false;
+        }
+        m_focusGateEnabled = true;
+        // OBS scene items are visible by default. Treat the freshly-created mask
+        // as visible so the first focus poll can hide it immediately if the game
+        // is already foreground, or leave it black while the user is alt-tabbed.
+        m_focusGateBlack = true;
+        obs_sceneitem_set_visible(m_obs->focusOverlayItem, true);
+        updateFocusGateOverlay();
+        m_focusGateTimer.start();
     }
 
     for (const QString &sourceId : audioSourceCandidates(audioSource)) {
@@ -2128,7 +2220,7 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
 #if defined(Q_OS_WIN)
     if (audioSource == AudioCaptureSource::GameOnly && m_obs->audioSource == nullptr) {
         if (error != nullptr) {
-            *error = QStringLiteral("OBS could not create Game only (Beta) Application Audio from VodLink's private plugins. Switch to Game and external audio or Full desktop for this game.");
+            *error = QStringLiteral("OBS could not create Game only Application Audio from VodLink's private plugins. Switch to Game and external audio or Desktop with external audio for this game.");
         }
         return false;
     }
@@ -2143,11 +2235,12 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
     // borrowed pointer here drops the caller-owned scene reference instead and
     // makes cleanup destroy the source while obs_canvas_remove_source() is
     // still detaching it.
-    DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("createScene complete canvas=%1x%2 video=%3 audio=%4 mic=%5")
+    DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("createScene complete canvas=%1x%2 video=%3 audio=%4 mic=%5 focusGate=%6")
                             .arg(m_outputSize.width()).arg(m_outputSize.height())
                             .arg(m_obs->videoSourceId,
                                  m_obs->audioSourceId.isEmpty() ? QStringLiteral("none") : m_obs->audioSourceId,
-                                 m_obs->micSourceId.isEmpty() ? QStringLiteral("none") : m_obs->micSourceId));
+                                 m_obs->micSourceId.isEmpty() ? QStringLiteral("none") : m_obs->micSourceId,
+                                 m_focusGateEnabled ? QStringLiteral("enabled") : QStringLiteral("disabled")));
     return true;
 }
 
@@ -2332,6 +2425,9 @@ void RtmpStreamer::cleanupObs()
 void RtmpStreamer::releaseObsObjects()
 {
     DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("releaseObsObjects"));
+    m_focusGateTimer.stop();
+    m_focusGateEnabled = false;
+    m_focusGateBlack = false;
     if (!m_obs) {
         return;
     }
@@ -2361,6 +2457,11 @@ void RtmpStreamer::releaseObsObjects()
     if (m_obs->videoEncoder != nullptr) {
         obs_encoder_release(m_obs->videoEncoder);
         m_obs->videoEncoder = nullptr;
+    }
+    if (m_obs->focusOverlaySource != nullptr) {
+        obs_source_release(m_obs->focusOverlaySource);
+        m_obs->focusOverlaySource = nullptr;
+        m_obs->focusOverlayItem = nullptr;
     }
     if (m_obs->micSource != nullptr) {
         obs_source_release(m_obs->micSource);
@@ -2405,6 +2506,7 @@ void RtmpStreamer::handleOutputStopped(int code)
 
     const bool intentional = m_stopping || code == OBS_OUTPUT_SUCCESS;
     m_diagnosticsTimer.stop();
+    m_focusGateTimer.stop();
     releaseObsObjects();
     m_obs.reset();
     m_running = false;
@@ -2415,6 +2517,28 @@ void RtmpStreamer::handleOutputStopped(int code)
         emit failed(QStringLiteral("OBS RTMP output stopped unexpectedly (code %1).").arg(code));
     }
     emit stopped();
+}
+
+
+void RtmpStreamer::updateFocusGateOverlay()
+{
+    if (!m_focusGateEnabled || !m_obs || m_obs->focusOverlayItem == nullptr) {
+        return;
+    }
+
+    QString details;
+    const bool focused = foregroundMatchesWindowHints(m_windowHints, &details);
+    const bool shouldBlack = !focused;
+    if (shouldBlack == m_focusGateBlack) {
+        return;
+    }
+
+    m_focusGateBlack = shouldBlack;
+    obs_sceneitem_set_visible(m_obs->focusOverlayItem, shouldBlack);
+    DebugLog::writeCategory(QStringLiteral("OBS"),
+                            QStringLiteral("focus privacy mask %1 (%2)")
+                                .arg(shouldBlack ? QStringLiteral("shown") : QStringLiteral("hidden"),
+                                     details));
 }
 
 QString RtmpStreamer::diagnosticSummary() const

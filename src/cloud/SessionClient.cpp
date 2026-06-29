@@ -102,6 +102,7 @@ void SessionClient::requestStopMatches()
             const QJsonObject object = value.toObject();
             const qint64 startedMs = static_cast<qint64>(object.value(QStringLiteral("startedAt")).toDouble());
             const QJsonValue stoppedValue = object.value(QStringLiteral("stoppedAt"));
+            const QJsonValue durationValue = object.value(QStringLiteral("durationMs"));
 
             Vod vod;
             vod.ownerEmail = object.value(QStringLiteral("email")).toString();
@@ -111,7 +112,9 @@ void SessionClient::requestStopMatches()
             vod.game = object.value(QStringLiteral("game")).toString();
             vod.streamStatus = QStringLiteral("shared");
             vod.startedAt = QDateTime::fromMSecsSinceEpoch(startedMs, QTimeZone(QTimeZone::UTC));
-            if (stoppedValue.isDouble()) {
+            if (durationValue.isDouble()) {
+                vod.durationMs = std::max<qint64>(0, static_cast<qint64>(durationValue.toDouble()));
+            } else if (stoppedValue.isDouble()) {
                 vod.durationMs = std::max<qint64>(0, static_cast<qint64>(stoppedValue.toDouble()) - startedMs);
             }
             if (!vod.youtubeId.isEmpty() && !vod.ownerEmail.isEmpty()) {

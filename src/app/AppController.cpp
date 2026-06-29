@@ -20,6 +20,7 @@ constexpr auto kPrivacyModeSetting = "privacy_mode";
 constexpr auto kFullDesktopSetting = "capture_full_desktop"; // legacy migration
 constexpr auto kPrivacyGameOnly = "game_only";
 constexpr auto kPrivacyGameExternalAudio = "game_external_audio";
+constexpr auto kPrivacyDesktop = "desktop";
 constexpr auto kPrivacyFullDesktop = "full_desktop";
 constexpr auto kEncoderSetting = "recorder_encoder";
 constexpr auto kBitrateSetting = "recorder_bitrate_kbps";
@@ -32,6 +33,7 @@ QString normalizedPrivacyMode(QString value)
     value = value.trimmed().toLower();
     if (value == QString::fromLatin1(kPrivacyGameOnly)
         || value == QString::fromLatin1(kPrivacyGameExternalAudio)
+        || value == QString::fromLatin1(kPrivacyDesktop)
         || value == QString::fromLatin1(kPrivacyFullDesktop)) {
         return value;
     }
@@ -411,7 +413,8 @@ bool AppController::initialize(QString *error)
         m_privacyMode = QString::fromLatin1(kPrivacyFullDesktop);
         m_repository.setSetting(QString::fromLatin1(kPrivacyModeSetting), m_privacyMode);
     }
-    m_captureFullDesktop = m_privacyMode == QString::fromLatin1(kPrivacyFullDesktop);
+    m_captureFullDesktop = m_privacyMode == QString::fromLatin1(kPrivacyFullDesktop)
+        || m_privacyMode == QString::fromLatin1(kPrivacyDesktop);
     m_autoRecordEnabled = m_repository.setting(QString::fromLatin1(kAutoRecordSetting),
                                                QStringLiteral("0")) == QStringLiteral("1");
     m_lastGame = m_repository.setting(QString::fromLatin1(kLastGameSetting));
@@ -600,7 +603,9 @@ QString AppController::privacyMode() const
 
 bool AppController::captureFullDesktop() const
 {
-    return privacyMode() == QString::fromLatin1(kPrivacyFullDesktop);
+    const QString privacy = privacyMode();
+    return privacy == QString::fromLatin1(kPrivacyFullDesktop)
+        || privacy == QString::fromLatin1(kPrivacyDesktop);
 }
 
 bool AppController::autoRecordEnabled() const
@@ -770,7 +775,8 @@ void AppController::setPrivacyMode(const QString &mode)
         return;
     }
     m_privacyMode = normalized;
-    m_captureFullDesktop = normalized == QString::fromLatin1(kPrivacyFullDesktop);
+    m_captureFullDesktop = normalized == QString::fromLatin1(kPrivacyFullDesktop)
+        || normalized == QString::fromLatin1(kPrivacyDesktop);
     m_repository.setSetting(QString::fromLatin1(kPrivacyModeSetting), normalized);
     m_repository.setSetting(QString::fromLatin1(kFullDesktopSetting),
                             m_captureFullDesktop ? QStringLiteral("1") : QStringLiteral("0"));
@@ -795,11 +801,12 @@ void AppController::applyRecorderSettings()
         fps = 60;
     }
 
-    // Do not let stale installs keep the old 12 Mbps default at high
-    // resolutions. Stream start normalizes to YouTube's current recommended
-    // ingest bitrate for the selected resolution/framerate/codec.
-    const int bitrate = youtubeRecommendedBitrateKbps(outputSize, fps, encoder);
-    if (m_repository.setting(QString::fromLatin1(kBitrateSetting), QString()).toInt(&ok) != bitrate || !ok) {
+    // Respect an explicit user bitrate. The YouTube recommendation is only a
+    // default for fresh/invalid settings; it must not silently overwrite a
+    // manual value at stream start.
+    int bitrate = m_repository.setting(QString::fromLatin1(kBitrateSetting), QString()).toInt(&ok);
+    if (!ok || bitrate <= 0) {
+        bitrate = youtubeRecommendedBitrateKbps(outputSize, fps, encoder);
         m_repository.setSetting(QString::fromLatin1(kBitrateSetting), QString::number(bitrate));
     }
 
@@ -979,10 +986,12 @@ void AppController::onBroadcastReady(const QString &broadcastId, const QString &
     QStringList windowHints = m_currentGameDefinition.processNames;
     windowHints.prepend(m_currentGameDefinition.name);
     const QString privacy = privacyMode();
-    const auto captureMode = privacy == QString::fromLatin1(kPrivacyFullDesktop)
+    const auto captureMode = (privacy == QString::fromLatin1(kPrivacyFullDesktop)
+                              || privacy == QString::fromLatin1(kPrivacyDesktop))
                                  ? CaptureMode::FullDesktop
                                  : CaptureMode::GameWindow;
-    const auto audioSource = privacy == QString::fromLatin1(kPrivacyGameOnly)
+    const auto audioSource = (privacy == QString::fromLatin1(kPrivacyGameOnly)
+                              || privacy == QString::fromLatin1(kPrivacyDesktop))
                                  ? AudioCaptureSource::GameOnly
                                  : AudioCaptureSource::System;
     if (!m_streamer.start(ingestUrl, captureMode, audioSource, windowHints, &error)) {

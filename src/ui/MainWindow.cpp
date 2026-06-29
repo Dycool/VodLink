@@ -13,6 +13,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -75,6 +76,7 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 
 namespace {
 constexpr auto kEncoderSetting = "recorder_encoder";
@@ -85,6 +87,7 @@ constexpr auto kNotificationsSetting = "notifications";
 constexpr auto kLaunchAtStartupSetting = "launch_at_startup";
 constexpr auto kPrivacyGameOnly = "game_only";
 constexpr auto kPrivacyGameExternalAudio = "game_external_audio";
+constexpr auto kPrivacyDesktop = "desktop";
 constexpr auto kPrivacyFullDesktop = "full_desktop";
 constexpr auto kStartupRunValue = "VodLink";
 
@@ -160,6 +163,76 @@ bool launchAtStartupEnabled()
 #else
     return false;
 #endif
+}
+
+
+constexpr qint64 kThumbnailRefreshWindowMs = 6LL * 60LL * 60LL * 1000LL;
+constexpr qint64 kThumbnailEarlyRefreshMs = 2LL * 60LL * 1000LL;
+constexpr qint64 kThumbnailLateRefreshMs = 10LL * 60LL * 1000LL;
+constexpr qint64 kThumbnailEarlyWindowMs = 60LL * 60LL * 1000LL;
+
+qint64 vodEndedAtMs(const Vod &vod)
+{
+    if (!vod.startedAt.isValid() || vod.durationMs <= 0) {
+        return 0;
+    }
+    return vod.startedAt.toUTC().toMSecsSinceEpoch() + vod.durationMs;
+}
+
+bool shouldRefreshVodThumbnail(const Vod &vod, qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch())
+{
+    if (vod.youtubeId.trimmed().isEmpty()) {
+        return false;
+    }
+    const qint64 endedAt = vodEndedAtMs(vod);
+    if (endedAt <= 0) {
+        // Live/unknown-duration VODs can still receive new generated posters.
+        return true;
+    }
+    return nowMs >= endedAt && (nowMs - endedAt) < kThumbnailRefreshWindowMs;
+}
+
+qint64 thumbnailRefreshIntervalMs(const Vod &vod, qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch())
+{
+    const qint64 endedAt = vodEndedAtMs(vod);
+    if (endedAt <= 0 || (nowMs - endedAt) < kThumbnailEarlyWindowMs) {
+        return kThumbnailEarlyRefreshMs;
+    }
+    return kThumbnailLateRefreshMs;
+}
+
+qint64 thumbnailProbeBackoffMs(const Vod &vod, int unchangedCount, qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch())
+{
+    const qint64 base = thumbnailRefreshIntervalMs(vod, nowMs);
+    const int multiplier = std::clamp(unchangedCount + 1, 1, 4);
+    const qint64 cap = vodEndedAtMs(vod) > 0 ? (30LL * 60LL * 1000LL) : (10LL * 60LL * 1000LL);
+    return std::min(base * multiplier, cap);
+}
+
+QByteArray thumbnailBytesHash(const QByteArray &bytes)
+{
+    return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
+}
+
+QString thumbnailCacheKey(const Vod &vod, qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch())
+{
+    const QString youtubeId = vod.youtubeId.trimmed();
+    if (!shouldRefreshVodThumbnail(vod, nowMs)) {
+        return youtubeId;
+    }
+    const qint64 bucket = nowMs / std::max<qint64>(1, thumbnailRefreshIntervalMs(vod, nowMs));
+    return QStringLiteral("%1|fresh|%2").arg(youtubeId, QString::number(bucket));
+}
+
+QUrl thumbnailUrl(const QString &youtubeId, bool refresh, qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch())
+{
+    QUrl url(QStringLiteral("https://i.ytimg.com/vi/%1/hqdefault.jpg").arg(youtubeId));
+    if (refresh) {
+        QUrlQuery query;
+        query.addQueryItem(QStringLiteral("vodlink"), QString::number(nowMs / (2LL * 60LL * 1000LL)));
+        url.setQuery(query);
+    }
+    return url;
 }
 
 bool setLaunchAtStartupEnabled(bool enabled, QString *error)
@@ -569,10 +642,13 @@ QString privacyLabelForMode(const QString &mode)
     if (normalized == QString::fromLatin1(kPrivacyGameExternalAudio)) {
         return QStringLiteral("Game and external audio");
     }
-    if (normalized == QString::fromLatin1(kPrivacyFullDesktop)) {
-        return QStringLiteral("Full desktop");
+    if (normalized == QString::fromLatin1(kPrivacyDesktop)) {
+        return QStringLiteral("Desktop");
     }
-    return QStringLiteral("Game only (Beta)");
+    if (normalized == QString::fromLatin1(kPrivacyFullDesktop)) {
+        return QStringLiteral("Desktop with external audio");
+    }
+    return QStringLiteral("Game only");
 }
 
 QString privacyModeForLabel(const QString &label)
@@ -580,7 +656,10 @@ QString privacyModeForLabel(const QString &label)
     if (label == QStringLiteral("Game and external audio")) {
         return QString::fromLatin1(kPrivacyGameExternalAudio);
     }
-    if (label == QStringLiteral("Full desktop")) {
+    if (label == QStringLiteral("Desktop")) {
+        return QString::fromLatin1(kPrivacyDesktop);
+    }
+    if (label == QStringLiteral("Desktop with external audio")) {
         return QString::fromLatin1(kPrivacyFullDesktop);
     }
     return QString::fromLatin1(kPrivacyGameOnly);
@@ -1445,17 +1524,27 @@ void MainWindow::openSettingsDialog()
         form->addRow(QString(), encoderWarning);
     }
 
+    const QString savedResolution = settingOr(m_controller->appSetting(QString::fromLatin1(kResolutionSetting)), nativeRecorderResolutionText());
+    const QString savedFps = settingOr(m_controller->appSetting(QString::fromLatin1(kFpsSetting)), QStringLiteral("60"));
+
     auto *bitrate = new QSpinBox;
     bitrate->setRange(2500, 40000); // YouTube HEVC/AV1 max range tops out at 40 Mbps.
     bitrate->setSingleStep(500);
     bitrate->setSuffix(QStringLiteral(" Kbps"));
-    bitrate->setValue(std::min(40000, m_controller->appSetting(QString::fromLatin1(kBitrateSetting), QStringLiteral("12000")).toInt()));
+    bool bitrateOk = false;
+    const int savedBitrate = m_controller->appSetting(QString::fromLatin1(kBitrateSetting)).toInt(&bitrateOk);
+    const int defaultBitrate = recommendedBitrateKbps(savedResolution,
+                                                     savedFps.toInt(),
+                                                     isEfficientCodec(encoder->currentText()));
+    bitrate->setValue((std::clamp)(bitrateOk ? savedBitrate : defaultBitrate, 2500, 40000));
+    if (!bitrateOk) {
+        m_controller->setAppSetting(QString::fromLatin1(kBitrateSetting), QString::number(bitrate->value()));
+    }
     form->addRow(QStringLiteral("Bitrate"), bitrate);
     connect(bitrate, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
         m_controller->setAppSetting(QString::fromLatin1(kBitrateSetting), QString::number(value));
     });
 
-    const QString savedResolution = settingOr(m_controller->appSetting(QString::fromLatin1(kResolutionSetting)), nativeRecorderResolutionText());
     auto *resolution = new QComboBox;
     resolution->setEditable(true);
     resolution->setInsertPolicy(QComboBox::NoInsert);
@@ -1489,32 +1578,22 @@ void MainWindow::openSettingsDialog()
 
     auto *fps = new QComboBox;
     fps->addItems({QStringLiteral("60"), QStringLiteral("30")});
-    fps->setCurrentText(settingOr(m_controller->appSetting(QString::fromLatin1(kFpsSetting)), QStringLiteral("60")));
+    fps->setCurrentText(savedFps);
     form->addRow(QStringLiteral("Framerate"), fps);
     connect(fps, &QComboBox::currentTextChanged, this, [this](const QString &text) {
         m_controller->setAppSetting(QString::fromLatin1(kFpsSetting), text);
     });
 
-    // Changing resolution or frame rate snaps the bitrate to YouTube's recommended
-    // value for that combo (accounting for the chosen codec). The user can still
-    // override it afterwards.
-    auto applyRecommendedBitrate = [encoder, resolution, fps, bitrate] {
-        bitrate->setValue(recommendedBitrateKbps(resolution->currentText(),
-                                                 fps->currentText().toInt(),
-                                                 isEfficientCodec(encoder->currentText())));
-    };
-    connect(resolution, &QComboBox::currentTextChanged, this, [applyRecommendedBitrate](const QString &) {
-        applyRecommendedBitrate();
-    });
-    connect(fps, &QComboBox::currentTextChanged, this, [applyRecommendedBitrate](const QString &) {
-        applyRecommendedBitrate();
-    });
+    // Resolution/FPS changes must not silently replace a manual bitrate. Fresh
+    // installs get a recommended default above; after that, the bitrate box is
+    // the source of truth until the user changes it.
 
     auto *privacy = new QComboBox;
     privacy->setMinimumWidth(300);
-    privacy->addItems({QStringLiteral("Game only (Beta)"),
+    privacy->addItems({QStringLiteral("Game only"),
                        QStringLiteral("Game and external audio"),
-                       QStringLiteral("Full desktop")});
+                       QStringLiteral("Desktop"),
+                       QStringLiteral("Desktop with external audio")});
     privacy->setCurrentText(privacyLabelForMode(m_controller->privacyMode()));
     form->addRow(QStringLiteral("Privacy"), privacy);
     connect(privacy, &QComboBox::currentTextChanged, this, [this](const QString &text) {
@@ -1891,7 +1970,7 @@ void MainWindow::rebuildVodGrid()
         card->setFixedSize(kVodCardSize, kVodCardSize);
         card->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         card->setStyleSheet(card->styleSheet());
-        requestVodThumbnail(vod.youtubeId, card);
+        requestVodThumbnail(vod, card);
         connect(card, &QPushButton::clicked, this, [this, i] { selectVod(i); });
         m_vodGridLayout->addWidget(card, i / columns, i % columns);
     }
@@ -2558,42 +2637,149 @@ void MainWindow::requestProfileIcon(const QString &pictureUrl)
     });
 }
 
-void MainWindow::requestVodThumbnail(const QString &youtubeId, QAbstractButton *button)
+void MainWindow::requestVodThumbnail(const Vod &vod, QAbstractButton *button)
 {
+    const QString youtubeId = vod.youtubeId.trimmed();
     if (youtubeId.isEmpty() || button == nullptr) {
         return;
     }
-    if (m_thumbnailCache.contains(youtubeId)) {
-        button->setIcon(m_thumbnailCache.value(youtubeId));
+
+    const qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+    const bool refresh = shouldRefreshVodThumbnail(vod, nowMs);
+    const QString cacheKey = thumbnailCacheKey(vod, nowMs);
+
+    if (m_thumbnailCache.contains(cacheKey)) {
+        button->setIcon(m_thumbnailCache.value(cacheKey));
+        if (refresh) {
+            scheduleVodThumbnailRefresh(vod, button);
+        }
         return;
     }
-    if (m_thumbnailRequests.contains(youtubeId)) {
+
+    // While YouTube is still generating better thumbnails after a live ends, keep
+    // the latest known thumbnail visible instead of bouncing back to the placeholder.
+    if (refresh) {
+        const QString prefix = youtubeId + QStringLiteral("|fresh|");
+        for (auto it = m_thumbnailCache.constBegin(); it != m_thumbnailCache.constEnd(); ++it) {
+            if (it.key().startsWith(prefix) || it.key() == youtubeId) {
+                button->setIcon(it.value());
+                break;
+            }
+        }
+
+        const qint64 nextProbeMs = m_thumbnailNextProbeMs.value(youtubeId, 0);
+        if (nextProbeMs > nowMs) {
+            scheduleVodThumbnailRefresh(vod, button);
+            return;
+        }
+    }
+
+    if (m_thumbnailRequests.contains(cacheKey)) {
+        if (refresh) {
+            scheduleVodThumbnailRefresh(vod, button);
+        }
         return;
     }
-    m_thumbnailRequests.insert(youtubeId);
+    m_thumbnailRequests.insert(cacheKey);
+
     QPointer<QAbstractButton> target(button);
-    QNetworkRequest request(QUrl(QStringLiteral("https://i.ytimg.com/vi/%1/hqdefault.jpg").arg(youtubeId)));
+    QNetworkRequest request(thumbnailUrl(youtubeId, refresh, nowMs));
     request.setTransferTimeout(6000);
+    request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
+                         refresh ? QNetworkRequest::AlwaysNetwork : QNetworkRequest::PreferCache);
     QNetworkReply *reply = m_avatarNetwork->get(request);
     connect(reply, &QNetworkReply::readyRead, this, [reply] {
         if (reply->bytesAvailable() > 2 * 1024 * 1024) {
             reply->abort();
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, youtubeId, target] {
-        m_thumbnailRequests.remove(youtubeId);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, vod, youtubeId, cacheKey, refresh, target] {
+        m_thumbnailRequests.remove(cacheKey);
+        QByteArray payload;
         QPixmap pixmap;
         if (reply->error() == QNetworkReply::NoError) {
-            pixmap.loadFromData(reply->readAll());
+            payload = reply->readAll();
+            pixmap.loadFromData(payload);
         }
         reply->deleteLater();
         if (pixmap.isNull()) {
+            if (!target.isNull() && refresh) {
+                scheduleVodThumbnailRefresh(vod, target);
+            }
             return;
         }
+
+        const QByteArray newHash = thumbnailBytesHash(payload);
+        const QByteArray previousHash = m_thumbnailHashes.value(youtubeId);
+        if (refresh && !previousHash.isEmpty() && previousHash == newHash) {
+            const int unchangedCount = m_thumbnailUnchangedCounts.value(youtubeId, 0) + 1;
+            m_thumbnailUnchangedCounts.insert(youtubeId, unchangedCount);
+            const qint64 nextProbeMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()
+                                      + thumbnailProbeBackoffMs(vod, unchangedCount);
+            m_thumbnailNextProbeMs.insert(youtubeId, nextProbeMs);
+            if (!target.isNull()) {
+                scheduleVodThumbnailRefresh(vod, target);
+            }
+            return;
+        }
+
+        m_thumbnailHashes.insert(youtubeId, newHash);
+        m_thumbnailUnchangedCounts.insert(youtubeId, 0);
+        if (refresh) {
+            m_thumbnailNextProbeMs.insert(youtubeId, QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()
+                                                     + thumbnailRefreshIntervalMs(vod));
+        } else {
+            m_thumbnailNextProbeMs.remove(youtubeId);
+        }
+
+        const QString prefix = youtubeId + QStringLiteral("|fresh|");
+        if (refresh) {
+            QList<QString> oldKeys;
+            for (auto it = m_thumbnailCache.constBegin(); it != m_thumbnailCache.constEnd(); ++it) {
+                if (it.key().startsWith(prefix) && it.key() != cacheKey) {
+                    oldKeys.push_back(it.key());
+                }
+            }
+            for (const QString &oldKey : oldKeys) {
+                m_thumbnailCache.remove(oldKey);
+            }
+        }
+
         QIcon icon(pixmap.scaled(520, 292, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
-        m_thumbnailCache.insert(youtubeId, icon);
+        m_thumbnailCache.insert(cacheKey, icon);
         if (!target.isNull()) {
             target->setIcon(icon);
+            if (refresh) {
+                scheduleVodThumbnailRefresh(vod, target);
+            }
+        }
+    });
+}
+
+void MainWindow::scheduleVodThumbnailRefresh(const Vod &vod, QAbstractButton *button)
+{
+    if (button == nullptr || !shouldRefreshVodThumbnail(vod)) {
+        return;
+    }
+    if (button->property("thumbnailRefreshScheduled").toBool()) {
+        return;
+    }
+    button->setProperty("thumbnailRefreshScheduled", true);
+    QPointer<QAbstractButton> target(button);
+    const QString youtubeId = vod.youtubeId.trimmed();
+    const qint64 nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+    const qint64 nextProbeMs = m_thumbnailNextProbeMs.value(youtubeId, 0);
+    const qint64 baseDelayMs = thumbnailRefreshIntervalMs(vod, nowMs);
+    const qint64 probeDelayMs = nextProbeMs > nowMs ? (nextProbeMs - nowMs) : baseDelayMs;
+    const int delayMs = static_cast<int>(std::min<qint64>(std::max<qint64>(1000, probeDelayMs),
+                                                          std::numeric_limits<int>::max()));
+    QTimer::singleShot(delayMs, this, [this, target, vod] {
+        if (target.isNull()) {
+            return;
+        }
+        target->setProperty("thumbnailRefreshScheduled", false);
+        if (shouldRefreshVodThumbnail(vod)) {
+            requestVodThumbnail(vod, target);
         }
     });
 }

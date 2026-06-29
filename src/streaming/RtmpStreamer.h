@@ -46,6 +46,7 @@ signals:
 private slots:
     void emitDiagnostics();
     void handleOutputStopped(int code);
+    void updateFocusGateOverlay();
 
 private:
     struct ObsHandles;
@@ -88,6 +89,9 @@ private:
     int m_runtimeFps = 0;
     VideoColorMode m_runtimeColorMode = VideoColorMode::Sdr709;
     QTimer m_diagnosticsTimer;
+    QTimer m_focusGateTimer;
+    bool m_focusGateEnabled = false;
+    bool m_focusGateBlack = false;
 };
 
 using CaptureMode = RtmpStreamer::CaptureMode;

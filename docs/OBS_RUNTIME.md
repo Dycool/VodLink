@@ -91,9 +91,10 @@ Automatic HDR detection is currently strongest on Windows because DXGI exposes H
 
 Audio is intentionally mode-based:
 
-- `Game only (Beta)`: Windows uses OBS' `wasapi_process_output_capture` Application Audio source, matching the Streamlabs/OBS model: video capture and per-process audio are separate sources. VodLink prefers the exact `title:class:exe` selector from OBS' own `window` property list. If the detected game process starts before OBS lists its window, VodLink supplies the catalog's executable with OBS' executable-priority selector so win-wasapi can bind on its reconnect loop as soon as the window appears. It never falls back to desktop audio. If the game has no usable executable hint or Application Audio is unavailable, VodLink fails stream start with a clear error instead of recording private desktop/system audio by surprise.
-- `Game and external audio`: capture the game window visually, but use system output audio so Discord/music/browser/etc. are included.
-- `Full desktop`: capture the desktop visually and use system output audio.
+- `Game only`: captures the real desktop with OBS monitor/display capture to avoid fragile Game Capture hooks. A black color-source privacy mask is shown whenever the detected game executable is not the foreground window. Audio uses OBS `wasapi_process_output_capture` Application Audio only; it never falls back to desktop audio.
+- `Game and external audio`: uses the same focus-gated desktop video, but captures system output audio and the default microphone so Discord/music/browser/mic/etc. are included.
+- `Desktop`: captures the desktop visually without the focus-gate mask, while keeping audio to OBS per-process game audio only.
+- `Desktop with external audio`: captures the desktop visually without the focus-gate mask and uses system output audio plus the default microphone.
 
 All audio sources are explicitly assigned to OBS mixer 1 and monitoring is disabled so OBS does not play captured audio back to the user.
 

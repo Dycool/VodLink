@@ -18,8 +18,9 @@ VodLink creates its own `obs-private` tree under the app-local data folder, pass
 
 - The selected recorder resolution is used as both OBS base canvas and output resolution. A `3440x1440` setting requests a `3440x1440` outgoing stream.
 - HDR is automatic when VodLink can detect HDR output support. On Windows this uses DXGI HDR display detection and switches to P010/Rec.2100 PQ + HEVC/Main10. `VODLINK_FORCE_HDR=1` exists as a debug override.
-- Game-only mode does not add desktop audio. It uses game/window capture audio or OBS per-process audio where available.
-- Game + external audio and full desktop mode use system output audio.
+- Game-only mode captures the desktop visually through OBS monitor/display capture, then places a black privacy mask over it whenever the detected game executable is not the foreground window. Audio stays OBS per-process game audio only.
+- Game + external audio uses the same focus-gated desktop video, but captures system output audio plus the default microphone.
+- Desktop captures the desktop visually with game-only audio. Desktop with external audio captures desktop video, system output audio, and the default microphone.
 
 ## Building
 

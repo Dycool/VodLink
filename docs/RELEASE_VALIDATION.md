@@ -81,12 +81,12 @@ that initializes libobs is the recorder startup path, which follows OBS' documen
 order: `obs_startup()`, `obs_reset_video()`, `obs_reset_audio()`, module path
 registration/loading, `obs_post_load_modules()`, then source/encoder/output creation.
 
-## Game only (Beta) validation
+## Game only validation
 
-On Windows, `Game only (Beta)` uses OBS Application Audio (`wasapi_process_output_capture`) like Streamlabs/OBS: the video source and per-process audio source are separate. Validate that:
+On Windows, `Game only` uses OBS Application Audio (`wasapi_process_output_capture`) like Streamlabs/OBS: the video source and per-process audio source are separate. Validate that:
 
 - the dynamic runtime bundles `win-wasapi.dll` and `data/obs-plugins/win-wasapi`;
-- Settings shows `Game only (Beta)`, `Game and external audio`, and `Full desktop`;
-- selecting `Game only (Beta)` creates `game_capture`/`window_capture` plus `wasapi_process_output_capture`, never `wasapi_output_capture`;
-- when OBS lists the target game, both sources receive its exact `window` property value; otherwise Game Capture uses `any_fullscreen` while Application Audio retains the detected executable selector, visible in diagnostics/logs;
-- if OBS has not listed the game window yet, Application Audio keeps the detected executable identity and binds when the window appears; if no executable hint exists or Application Audio is unavailable, VodLink fails stream start with a clear error instead of silently recording desktop audio.
+- Settings shows `Game only`, `Game and external audio`, `Desktop`, and `Desktop with external audio`;
+- selecting `Game only` creates `monitor_capture` plus the black focus privacy mask and `wasapi_process_output_capture`, never `game_capture`/`window_capture` or `wasapi_output_capture`;
+- alt-tabbing away from the detected game makes the video black, then focusing the game hides the mask again;
+- Application Audio receives either OBS' exact `window` property value or the executable-priority selector from the detected game process; if no executable hint exists or Application Audio is unavailable, VodLink fails stream start with a clear error instead of silently recording desktop audio.

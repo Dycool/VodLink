@@ -2,6 +2,7 @@
 
 #include "library/Vod.h"
 
+#include <QByteArray>
 #include <QHash>
 #include <QIcon>
 #include <QMainWindow>
@@ -85,7 +86,8 @@ private:
     void refreshStats();
     QWidget *createFriendRow(const AccountProfile &profile);
     void requestProfileIcon(const QString &pictureUrl);
-    void requestVodThumbnail(const QString &youtubeId, QAbstractButton *button);
+    void requestVodThumbnail(const Vod &vod, QAbstractButton *button);
+    void scheduleVodThumbnailRefresh(const Vod &vod, QAbstractButton *button);
     void applyProfileIcon(const QString &pictureUrl, const QIcon &icon);
     void applyAccountIcon(const QIcon &icon);
     static QIcon fallbackProfileIcon(const QString &text);
@@ -154,5 +156,8 @@ private:
     QSet<QString> m_avatarRequests;
     QHash<QString, QIcon> m_thumbnailCache;
     QSet<QString> m_thumbnailRequests;
+    QHash<QString, QByteArray> m_thumbnailHashes;
+    QHash<QString, int> m_thumbnailUnchangedCounts;
+    QHash<QString, qint64> m_thumbnailNextProbeMs;
     double m_viewerStartSeconds = 0.0;
 };

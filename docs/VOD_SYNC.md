@@ -15,10 +15,11 @@ at 03:00 and a friend's recording started 80 seconds later, their player opens a
 01:40 and continues playback automatically.
 
 The in-app player keeps one `QWebEngineView` alive for the whole viewer session
-and now keeps a small LRU cache of YouTube IFrame players for linked participant
-VODs. Hidden participant players are created as soon as the linked strip is
-rebuilt, so switching avatars reuses a warm iframe/player instead of destroying
-and recreating the embed every time.
+and uses a `lite-youtube-embed` style facade for linked participant VODs. Hidden
+participant entries are cheap poster/facade elements, not live YouTube iframes,
+so they are fast to paint and do not poison playback before the user switches to
+them. When a POV becomes active, VodLink creates the real YouTube JS player only
+for that VOD, seeks to `targetOffset`, and starts playback.
 
 The sync path uses fractional seconds internally. Copied YouTube links are still
 floored to whole seconds because YouTube watch URLs use integer `t=` offsets.

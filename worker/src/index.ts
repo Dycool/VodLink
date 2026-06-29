@@ -224,6 +224,9 @@ async function handleStop(env: Env, email: string): Promise<Response> {
       game: row.game,
       startedAt: row.started_at,
       stoppedAt: row.stopped_at,
+      // The desktop client uses these real-world timestamps to preserve the
+      // same moment when switching POVs: targetOffset = currentAbsoluteTime - startedAt.
+      durationMs: row.stopped_at === null ? null : Math.max(0, row.stopped_at - row.started_at),
     });
     if (vods.length >= MAX_MATCHES) break;
   }

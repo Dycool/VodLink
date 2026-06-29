@@ -5,20 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="referrer" content="strict-origin-when-cross-origin" />
   <title>VodLink Player</title>
-  <link rel="preconnect" href="https://www.youtube.com">
   <link rel="preconnect" href="https://www.youtube-nocookie.com">
+  <link rel="preconnect" href="https://www.youtube.com">
   <link rel="preconnect" href="https://i.ytimg.com">
-  <link rel="preconnect" href="https://s.ytimg.com">
   <style>
     html, body { margin: 0; width: 100%; height: 100%; background: #07080b; overflow: hidden; }
     #players { position: fixed; inset: 0; width: 100vw; height: 100vh; background: #07080b; overflow: hidden; }
-    .playerSlot, .playerSlot iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #07080b; }
-    .playerSlot { display: block; opacity: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+    .playerSlot { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #07080b; display: block; opacity: 0; pointer-events: none; z-index: 0; overflow: hidden; }
     .playerSlot.active { opacity: 1; pointer-events: auto; z-index: 1; }
+    vodlink-lite-youtube, vodlink-lite-youtube iframe, vodlink-lite-youtube .lyt-player { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    vodlink-lite-youtube { display: block; contain: content; background: #000 center center / cover no-repeat; cursor: pointer; }
+    vodlink-lite-youtube::before {
+      content: attr(data-title); display: block; position: absolute; top: 0; left: 0; right: 0; height: 99px;
+      color: hsl(0deg 0% 93.33%); text-shadow: 0 0 2px rgba(0,0,0,.5);
+      font: 18px "YouTube Noto", Roboto, Arial, Helvetica, sans-serif; padding: 25px 20px; overflow: hidden;
+      white-space: nowrap; text-overflow: ellipsis; box-sizing: border-box;
+      background-image: linear-gradient(180deg, rgb(0 0 0 / 67%) 0%, rgb(0 0 0 / 54%) 14%, rgb(0 0 0 / 15%) 54%, rgb(0 0 0 / 5%) 72%, rgb(0 0 0 / 0%) 94%);
+    }
+    vodlink-lite-youtube.lyt-activated { cursor: unset; }
+    vodlink-lite-youtube.lyt-activated::before, vodlink-lite-youtube.lyt-activated > .lyt-playbtn { opacity: 0; pointer-events: none; }
+    .lyt-playbtn {
+      position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; border: 0; cursor: pointer;
+      background: no-repeat center / 84px 59px; filter: grayscale(100%); transition: filter .1s cubic-bezier(0, 0, 0.2, 1);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='68' height='48' viewBox='0 0 68 48'%3E%3Cpath fill='%23f00' d='M66.52 7.74a8.27 8.27 0 0 0-5.82-5.86C55.56.5 34 .5 34 .5S12.44.5 7.3 1.88a8.27 8.27 0 0 0-5.82 5.86C.1 12.9.1 24 .1 24s0 11.1 1.38 16.26a8.27 8.27 0 0 0 5.82 5.86C12.44 47.5 34 47.5 34 47.5s21.56 0 26.7-1.38a8.27 8.27 0 0 0 5.82-5.86C67.9 35.1 67.9 24 67.9 24s0-11.1-1.38-16.26z'/%3E%3Cpath fill='%23fff' d='M45 24 27 14v20z'/%3E%3C/svg%3E");
+    }
+    vodlink-lite-youtube:hover > .lyt-playbtn, .lyt-playbtn:focus { filter: none; }
+    .lyt-visually-hidden { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
     #overlay {
       position: fixed; inset: 0; display: none; place-items: center;
       color: #8d94a5; font: 16px sans-serif; text-align: center; padding: 24px;
-      background: rgba(7, 8, 11, 0.92); z-index: 10;
+      background: rgba(7, 8, 11, 0.82); z-index: 10;
     }
   </style>
 </head>
@@ -28,23 +44,250 @@
 
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <script>
-    let apiReady = false;
     let bridge = null;
-    let pendingLoad = null;      // { videoId, seek, hostIndex }
-    let pendingCache = [];       // video ids requested before the API is ready
+    let pendingLoad = null;      // { videoId, seek }
+    let pendingCache = [];       // video ids requested before the bridge is ready
     let activeId = '';
     let lastLoad = null;
     let retryCount = 0;
     let retryTimer = null;
     let reportTimer = null;
-    let apiTimer = null;
     let nextSlot = 1;
-    const players = new Map();   // videoId -> { player, div, ready, pendingSeek, lastUsed, hostIndex, raw }
-    const maxCachedPlayers = 6;
-    const playerHosts = ['https://www.youtube.com', 'https://www.youtube-nocookie.com'];
+    const players = new Map();   // videoId -> { element, div, player, ready, pendingSeek, lastUsed, raw, rawStartedAt }
+    const maxCachedPlayers = 10;
     const appOrigin = (window.location.origin && window.location.origin !== 'null')
       ? window.location.origin
       : 'https://vodlink.app';
+
+    // Adapted for VodLink from the lite-youtube-embed idea: render a cheap
+    // poster/play facade first, and only create YouTube's heavy iframe/API for
+    // the active POV. VodLink keeps the JS API path because POV switching needs
+    // getCurrentTime() and seekTo() for real-world timestamp sync.
+    let ytApiPromise = null;
+    function loadYouTubeApi() {
+      if (window.YT && window.YT.Player) return Promise.resolve();
+      if (ytApiPromise) return ytApiPromise;
+      ytApiPromise = new Promise((resolve, reject) => {
+        const previous = window.onYouTubeIframeAPIReady;
+        window.onYouTubeIframeAPIReady = function () {
+          if (typeof previous === 'function') {
+            try { previous(); } catch (_) {}
+          }
+          resolve();
+        };
+        const tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        tag.async = true;
+        tag.onerror = reject;
+        document.head.appendChild(tag);
+      });
+      return ytApiPromise;
+    }
+
+    class VodLinkLiteYouTube extends HTMLElement {
+      connectedCallback() {
+        this.videoId = this.getAttribute('videoid') || '';
+        this.playLabel = this.getAttribute('playlabel') || 'Play VOD';
+        this.dataset.title = this.getAttribute('title') || '';
+        this.posterHash = this.posterHash || '';
+        this.posterObjectUrl = this.posterObjectUrl || '';
+        this.posterRawUrl = this.posterRawUrl || '';
+        if (this.videoId) {
+          this.refreshPoster(true);
+          if (!this.posterTimer) {
+            this.posterTimer = window.setInterval(() => this.refreshPoster(false), 5 * 60 * 1000);
+          }
+        }
+        if (!this.querySelector('.lyt-playbtn')) {
+          const playBtn = document.createElement('button');
+          playBtn.type = 'button';
+          playBtn.className = 'lyt-playbtn';
+          const label = document.createElement('span');
+          label.className = 'lyt-visually-hidden';
+          label.textContent = this.playLabel;
+          playBtn.appendChild(label);
+          this.appendChild(playBtn);
+        }
+        this.addEventListener('pointerover', VodLinkLiteYouTube.warmConnections, { once: true });
+        this.addEventListener('focusin', VodLinkLiteYouTube.warmConnections, { once: true });
+        this.addEventListener('click', () => {
+          if (this.onUserActivate) this.onUserActivate();
+        });
+      }
+
+      static addPrefetch(kind, url) {
+        const link = document.createElement('link');
+        link.rel = kind;
+        link.href = url;
+        document.head.append(link);
+      }
+
+      static warmConnections() {
+        if (VodLinkLiteYouTube.preconnected) return;
+        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://www.youtube-nocookie.com');
+        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://www.youtube.com');
+        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://i.ytimg.com');
+        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://s.ytimg.com');
+        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://www.google.com');
+        VodLinkLiteYouTube.preconnected = true;
+      }
+
+      disconnectedCallback() {
+        if (this.posterTimer) {
+          window.clearInterval(this.posterTimer);
+          this.posterTimer = 0;
+        }
+        if (this.posterObjectUrl) {
+          try { URL.revokeObjectURL(this.posterObjectUrl); } catch (_) {}
+          this.posterObjectUrl = '';
+        }
+      }
+
+      posterRefreshToken() {
+        // YouTube often replaces the autogenerated thumbnail minutes after a
+        // live VOD ends. Keep the facade URL moving so Chromium/CDN cache does
+        // not freeze VodLink on the first rough generated poster.
+        return Math.floor(Date.now() / (5 * 60 * 1000));
+      }
+
+      posterUrl(path, webp) {
+        const base = webp ? 'https://i.ytimg.com/vi_webp/' : 'https://i.ytimg.com/vi/';
+        return `${base}${this.videoId}/${path}?vodlink=${this.posterRefreshToken()}`;
+      }
+
+      static async sha256Hex(blob) {
+        if (!window.crypto || !window.crypto.subtle) return '';
+        const digest = await window.crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+        return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      }
+
+      static imageInfo(url) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = reject;
+          img.src = url;
+        });
+      }
+
+      applyPosterUrl(url, hash, objectUrl) {
+        if (this.posterObjectUrl && this.posterObjectUrl !== url) {
+          try { URL.revokeObjectURL(this.posterObjectUrl); } catch (_) {}
+        }
+        this.posterObjectUrl = objectUrl ? url : '';
+        this.posterRawUrl = objectUrl ? '' : url;
+        this.posterHash = hash || this.posterHash || '';
+        this.style.backgroundImage = `url("${url}")`;
+      }
+
+      async probeAndApplyPoster(url, validate) {
+        const response = await fetch(url, { cache: 'reload', mode: 'cors' });
+        if (!response.ok) throw new Error(`thumbnail http ${response.status}`);
+        const blob = await response.blob();
+        if (blob.size > 2 * 1024 * 1024) throw new Error('thumbnail too large');
+
+        const hash = await VodLinkLiteYouTube.sha256Hex(blob);
+        if (hash && this.posterHash && hash === this.posterHash) {
+          return false;
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+          if (validate) {
+            const info = await VodLinkLiteYouTube.imageInfo(objectUrl);
+            if (!validate(info)) {
+              URL.revokeObjectURL(objectUrl);
+              return false;
+            }
+          }
+          this.applyPosterUrl(objectUrl, hash, true);
+          return true;
+        } catch (error) {
+          URL.revokeObjectURL(objectUrl);
+          throw error;
+        }
+      }
+
+      refreshPoster(upgrade) {
+        if (!this.videoId || this.classList.contains('lyt-activated')) return;
+        const fallbackUrl = this.posterUrl('hqdefault.jpg', false);
+        this.probeAndApplyPoster(fallbackUrl).then((changed) => {
+          if (upgrade && changed) this.upgradePosterImage();
+        }).catch(() => {
+          // Some Chromium builds/CDNs may block JS reads of thumbnail bytes. Keep
+          // first paint working, but do not blindly replace an already shown poster.
+          if (!this.posterHash && !this.posterObjectUrl && !this.posterRawUrl) {
+            this.applyPosterUrl(fallbackUrl, '', false);
+            if (upgrade) this.upgradePosterImage();
+          }
+        });
+      }
+
+      upgradePosterImage() {
+        setTimeout(() => {
+          const webpUrl = this.posterUrl('sddefault.webp', true);
+          this.probeAndApplyPoster(webpUrl, (info) => !(info.width === 120 && info.height === 90)).catch(() => {});
+        }, 100);
+      }
+
+      destroyPlayer() {
+        if (this.player && this.player.destroy) {
+          try { this.player.destroy(); } catch (_) {}
+        }
+        this.player = null;
+        this.playerPromise = null;
+        this.classList.remove('lyt-activated');
+        for (const node of Array.from(this.querySelectorAll('.lyt-player'))) {
+          try { node.remove(); } catch (_) {}
+        }
+      }
+
+      async getYTPlayer(start, handlers) {
+        if (this.playerPromise) return this.playerPromise;
+        this.classList.add('lyt-activated');
+        VodLinkLiteYouTube.warmConnections();
+        await loadYouTubeApi();
+        const holder = document.createElement('div');
+        holder.className = 'lyt-player';
+        this.appendChild(holder);
+        const playerVars = {
+          autoplay: 1,
+          controls: 1,
+          rel: 0,
+          modestbranding: 1,
+          playsinline: 1,
+          enablejsapi: 1,
+          iv_load_policy: 3,
+          fs: 1,
+          origin: appOrigin,
+          widget_referrer: appOrigin + '/',
+          start: Math.max(0, Math.floor(Number(start || 0))),
+        };
+        this.playerPromise = new Promise((resolve) => {
+          this.player = new YT.Player(holder, {
+            host: 'https://www.youtube-nocookie.com',
+            width: '100%',
+            height: '100%',
+            videoId: this.videoId,
+            playerVars,
+            events: {
+              onReady: (event) => {
+                resolve(event.target);
+                if (handlers && handlers.onReady) handlers.onReady(event);
+              },
+              onStateChange: (event) => { if (handlers && handlers.onStateChange) handlers.onStateChange(event); },
+              onError: (event) => { if (handlers && handlers.onError) handlers.onError(event); },
+              onAutoplayBlocked: () => { if (handlers && handlers.onAutoplayBlocked) handlers.onAutoplayBlocked(); },
+            },
+          });
+        });
+        return this.playerPromise;
+      }
+    }
+
+    if (!customElements.get('vodlink-lite-youtube')) {
+      customElements.define('vodlink-lite-youtube', VodLinkLiteYouTube);
+    }
 
     function showOverlay(text) {
       const o = document.getElementById('overlay');
@@ -67,13 +310,43 @@
       return players.get(videoId) || null;
     }
 
-    function destroyPlayer(videoId) {
+    function makeLiteSlot(videoId) {
+      let slot = slotFor(videoId);
+      if (slot) return slot;
+      const div = document.createElement('div');
+      div.className = 'playerSlot';
+      div.id = 'yt-slot-' + (nextSlot++);
+      const element = document.createElement('vodlink-lite-youtube');
+      element.setAttribute('videoid', videoId);
+      element.setAttribute('playlabel', 'Play VOD');
+      element.onUserActivate = () => {
+        if (activeId === videoId) {
+          seekAndPlay(videoId, slot.pendingSeek || 0);
+        } else {
+          doLoad(videoId, slot.pendingSeek || 0, false);
+        }
+      };
+      div.appendChild(element);
+      document.getElementById('players').appendChild(div);
+      slot = { element, div, player: null, ready: false, pendingSeek: 0, lastUsed: Date.now(), raw: false, rawStartedAt: 0 };
+      players.set(videoId, slot);
+      evictCache();
+      return slot;
+    }
+
+    function destroyPlayer(videoId, keepFacade) {
       const slot = slotFor(videoId);
       if (!slot) return;
-      try { if (slot.player && slot.player.destroy) slot.player.destroy(); } catch (_) {}
-      try { if (slot.div) slot.div.remove(); } catch (_) {}
-      players.delete(videoId);
-      if (activeId === videoId) activeId = '';
+      try { if (slot.element && slot.element.destroyPlayer) slot.element.destroyPlayer(); } catch (_) {}
+      slot.player = null;
+      slot.ready = false;
+      slot.raw = false;
+      slot.rawStartedAt = 0;
+      if (!keepFacade) {
+        try { if (slot.div) slot.div.remove(); } catch (_) {}
+        players.delete(videoId);
+        if (activeId === videoId) activeId = '';
+      }
     }
 
     function evictCache() {
@@ -83,88 +356,34 @@
         .sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
       while (players.size > maxCachedPlayers && candidates.length) {
         const [id] = candidates.shift();
-        destroyPlayer(id);
+        destroyPlayer(id, false);
       }
     }
 
-    function makeSlot(videoId) {
-      const div = document.createElement('div');
-      div.className = 'playerSlot';
-      div.id = 'yt-slot-' + (nextSlot++);
-      document.getElementById('players').appendChild(div);
-      const slot = { player: null, div, ready: false, pendingSeek: 0, lastUsed: Date.now(), hostIndex: 0, raw: false };
-      players.set(videoId, slot);
-      return slot;
-    }
-
-    function createPlayer(videoId, preferredSeek, autoplay, hostIndex) {
-      const host = playerHosts[Math.abs(hostIndex || 0) % playerHosts.length];
-      const existing = slotFor(videoId);
-      if (existing && !existing.raw && existing.hostIndex === hostIndex) {
-        existing.lastUsed = Date.now();
-        if (typeof preferredSeek === 'number') existing.pendingSeek = preferredSeek;
-        return existing;
-      }
-      if (existing) destroyPlayer(videoId);
-
-      const div = document.createElement('div');
-      div.className = 'playerSlot';
-      div.id = 'yt-slot-' + (nextSlot++);
-      document.getElementById('players').appendChild(div);
-
-      const slot = { player: null, div, ready: false, pendingSeek: preferredSeek || 0, lastUsed: Date.now(), hostIndex: hostIndex || 0, raw: false };
-      players.set(videoId, slot);
-
-      slot.player = new YT.Player(div.id, {
-        host,
-        width: '100%', height: '100%', videoId,
-        playerVars: {
-          autoplay: autoplay ? 1 : 0,
-          controls: 1, rel: 0, modestbranding: 1, playsinline: 1, enablejsapi: 1,
-          iv_load_policy: 3, fs: 1, origin: appOrigin, widget_referrer: appOrigin + '/',
-          start: Math.max(0, Math.floor(slot.pendingSeek || 0)),
-        },
-        events: {
-          onReady: function () {
-            slot.ready = true;
-            if (activeId === videoId) {
-              seekAndPlay(videoId, slot.pendingSeek || 0);
-            }
-          },
-          onStateChange: function (e) { onStateChange(videoId, e); },
-          onError: function (e) { onPlayerError(videoId, e); },
-          onAutoplayBlocked: onAutoplayBlocked,
-        },
-      });
-
-      evictCache();
-      return slot;
-    }
-
-    function rawEmbedUrl(videoId, seek, hostIndex) {
-      const host = playerHosts[Math.abs(hostIndex || 0) % playerHosts.length];
+    function rawEmbedUrl(videoId, seek) {
       const qs = new URLSearchParams({
         autoplay: '1', controls: '1', rel: '0', modestbranding: '1', playsinline: '1',
         fs: '1', start: String(Math.max(0, Math.floor(seek || 0))), origin: appOrigin,
       });
-      return host + '/embed/' + encodeURIComponent(videoId) + '?' + qs.toString();
+      return 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(videoId) + '?' + qs.toString();
     }
 
-    function createRawIframe(videoId, seek, hostIndex) {
-      destroyPlayer(videoId);
-      const slot = makeSlot(videoId);
+    function createRawIframe(videoId, seek) {
+      const slot = makeLiteSlot(videoId);
+      destroyPlayer(videoId, true);
       slot.raw = true;
       slot.ready = true;
       slot.pendingSeek = Math.max(0, Number(seek || 0));
       slot.rawStartedAt = Date.now();
-      slot.hostIndex = hostIndex || 0;
 
+      slot.element.classList.add('lyt-activated');
       const iframe = document.createElement('iframe');
-      iframe.src = rawEmbedUrl(videoId, slot.pendingSeek, slot.hostIndex);
+      iframe.className = 'lyt-player';
+      iframe.src = rawEmbedUrl(videoId, slot.pendingSeek);
       iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
       iframe.referrerPolicy = 'strict-origin-when-cross-origin';
       iframe.allowFullscreen = true;
-      slot.div.appendChild(iframe);
+      slot.element.appendChild(iframe);
       setActive(videoId);
       showOverlay(null);
       startReporting();
@@ -183,50 +402,62 @@
       activeId = videoId;
     }
 
-    function seekAndPlay(videoId, seek) {
+    async function ensurePlayer(videoId, seek) {
+      const slot = makeLiteSlot(videoId);
+      slot.pendingSeek = Math.max(0, Number(seek || 0));
+      slot.lastUsed = Date.now();
+      if (slot.raw) {
+        createRawIframe(videoId, slot.pendingSeek);
+        return slot;
+      }
+      if (slot.ready && slot.player) return slot;
+      showOverlay('Loading YouTube player...');
+      try {
+        const player = await slot.element.getYTPlayer(slot.pendingSeek, {
+          onReady: function (event) {
+            slot.player = event.target;
+            slot.ready = true;
+            if (activeId === videoId) {
+              seekAndPlay(videoId, slot.pendingSeek || 0);
+            }
+          },
+          onStateChange: function (event) { onStateChange(videoId, event); },
+          onError: function (event) { onPlayerError(videoId, event); },
+          onAutoplayBlocked: onAutoplayBlocked,
+        });
+        slot.player = player;
+        slot.ready = true;
+      } catch (_) {
+        showOverlay('Could not load the YouTube embedded player API. Trying a plain embed iframe...');
+        createRawIframe(videoId, slot.pendingSeek);
+      }
+      return slot;
+    }
+
+    async function seekAndPlay(videoId, seek) {
       const slot = slotFor(videoId);
       if (!slot) return;
       slot.lastUsed = Date.now();
       const start = Math.max(0, Number(seek || 0));
+      slot.pendingSeek = start;
       if (slot.raw) {
-        createRawIframe(videoId, start, slot.hostIndex || 0);
+        createRawIframe(videoId, start);
         return;
       }
-      if (!slot.player) return;
+      if (!slot.ready || !slot.player) {
+        await ensurePlayer(videoId, start);
+      }
       try {
-        if (slot.ready) {
+        if (slot.player && slot.player.seekTo) {
           slot.player.seekTo(start, true);
           slot.player.playVideo();
-        } else {
-          slot.pendingSeek = start;
+          startReporting();
+          showOverlay(null);
         }
       } catch (_) {
         showOverlay('Could not load this VOD inside the app.');
       }
     }
-
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    tag.onerror = function () {
-      showOverlay('Could not load the YouTube embedded player API. Check network access inside Qt WebEngine.');
-    };
-    document.head.appendChild(tag);
-    apiTimer = setTimeout(() => {
-      if (!apiReady) {
-        showOverlay('YouTube embedded player is still loading. If it stays here, Qt WebEngine could not reach youtube.com.');
-      }
-    }, 10000);
-
-    window.onYouTubeIframeAPIReady = function () {
-      apiReady = true;
-      if (apiTimer) { clearTimeout(apiTimer); apiTimer = null; }
-      cacheVideos(pendingCache);
-      pendingCache = [];
-      if (pendingLoad) {
-        doLoad(pendingLoad.videoId, pendingLoad.seek, false, pendingLoad.hostIndex || 0);
-        pendingLoad = null;
-      }
-    };
 
     function onAutoplayBlocked() {
       showOverlay('Click the player to start playback. The embedded browser blocked autoplay with audio.');
@@ -234,48 +465,35 @@
 
     function onPlayerError(videoId, e) {
       const code = e && typeof e.data !== 'undefined' ? String(e.data) : 'unknown';
-      // A hidden/preloaded iframe that errors should never be reused later. This
-      // was the common poison path for YouTube error 5: cache first, fail hidden,
-      // then clicking the VOD reused the already-broken player.
       if (videoId !== activeId) {
-        destroyPlayer(videoId);
+        destroyPlayer(videoId, true);
         return;
       }
       if (code === '153') {
-        showOverlay('YouTube rejected the embedded player configuration (error 153).');
+        showOverlay('YouTube rejected the embedded player configuration (error 153). Trying a plain embed iframe...');
+        createRawIframe(videoId, lastLoad ? lastLoad.seek : 0);
         return;
       }
 
-      if (lastLoad && retryCount < 20) {
+      if (lastLoad && retryCount < 6) {
         retryCount += 1;
-        const isHtml5Error = code === '5';
-        if (isHtml5Error && retryCount >= 5) {
-          showOverlay('YouTube\'s IFrame API kept returning HTML5 error 5. Trying a plain embed iframe...');
-          createRawIframe(lastLoad.videoId, lastLoad.seek, retryCount % playerHosts.length);
-          return;
-        }
-
-        const waitMs = isHtml5Error ? 1500 : (retryCount < 4 ? 5000 : 15000);
-        const nextHost = isHtml5Error ? ((lastLoad.hostIndex || 0) + 1) : (lastLoad.hostIndex || 0);
-        const reason = isHtml5Error
-          ? 'YouTube\'s HTML5 player failed to initialize in the embedded browser'
-          : 'YouTube says this VOD is not embeddable yet';
-        showOverlay(reason + ' (error ' + code + '). Rebuilding player in '
+        const waitMs = code === '5' ? 800 : 2500;
+        showOverlay('YouTube player failed inside Qt WebEngine (error ' + code + '). Rebuilding in '
           + Math.round(waitMs / 1000) + 's...');
-        destroyPlayer(videoId);
+        destroyPlayer(videoId, true);
         if (retryTimer) clearTimeout(retryTimer);
         retryTimer = setTimeout(() => {
           retryTimer = null;
-          if (lastLoad) doLoad(lastLoad.videoId, lastLoad.seek, true, nextHost);
+          if (lastLoad) doLoad(lastLoad.videoId, lastLoad.seek, true);
         }, waitMs);
         return;
       }
-      showOverlay('This VOD is unavailable in the embedded player (YouTube error '
-        + code + '). It may still be processing, private, or embedding may still be disabled.');
+      showOverlay('YouTube still rejected the JS player. Falling back to a plain lite iframe...');
+      createRawIframe(videoId, lastLoad ? lastLoad.seek : 0);
     }
 
     function onStateChange(videoId, e) {
-      if (videoId !== activeId) return;
+      if (videoId !== activeId || !window.YT) return;
       if (e.data === YT.PlayerState.PLAYING) {
         retryCount = 0;
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
@@ -305,37 +523,37 @@
       if (reportTimer) { clearInterval(reportTimer); reportTimer = null; }
     }
 
-    function doLoad(videoId, seek, isRetry, hostIndex) {
+    async function doLoad(videoId, seek, isRetry) {
       videoId = String(videoId || '').trim();
       if (!videoId) { showOverlay('Select a VOD to watch'); return; }
       if (!validYouTubeId(videoId)) { showOverlay('This VOD has an invalid YouTube id.'); return; }
       const start = Math.max(0, Number(seek || 0));
-      if (!apiReady || typeof YT === 'undefined' || !YT.Player) {
-        pendingLoad = { videoId, seek: start, hostIndex: hostIndex || 0 };
+      if (!bridge) {
+        pendingLoad = { videoId, seek: start };
         return;
       }
       if (!isRetry) {
         retryCount = 0;
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
       }
-      lastLoad = { videoId, seek: start, hostIndex: hostIndex || 0 };
-      showOverlay(null);
-      createPlayer(videoId, start, true, hostIndex || 0);
+      lastLoad = { videoId, seek: start };
+      const slot = makeLiteSlot(videoId);
+      slot.pendingSeek = start;
       setActive(videoId);
+      await ensurePlayer(videoId, start);
       seekAndPlay(videoId, start);
     }
 
     function cacheVideos(ids) {
-      // Do not create hidden YouTube players here. Hidden preloading looked smooth
-      // on paper but caused exactly the bad behavior users saw: YouTube error 5 can
-      // happen while the iframe is inactive, and reusing that poisoned player later
-      // keeps the embed broken. Keeping successful players warm after first play is
-      // safe; eagerly instantiating unseen iframes is not.
-      pendingCache = Array.from(new Set(pendingCache.concat(normalizeIds(ids))));
+      const unique = Array.from(new Set(normalizeIds(ids))).filter(validYouTubeId);
+      for (const id of unique) {
+        makeLiteSlot(id);
+      }
+      pendingCache = unique;
     }
 
     window.vodlink = {
-      loadVideo: function (videoId, seek) { doLoad(videoId, seek, false, 0); },
+      loadVideo: function (videoId, seek) { doLoad(videoId, seek, false); },
       seek: function (seconds) { seekAndPlay(activeId, Math.max(0, Number(seconds || 0))); },
       play: function () { const s = slotFor(activeId); if (s && s.player) s.player.playVideo(); },
       pause: function () { const s = slotFor(activeId); if (s && s.player) s.player.pauseVideo(); },
@@ -352,6 +570,11 @@
       if (bridge.messageRequested) bridge.messageRequested.connect(window.vodlink.message);
       if (bridge.cacheRequested) bridge.cacheRequested.connect(window.vodlink.cacheVideos);
       if (bridge.ready) bridge.ready();
+      cacheVideos(pendingCache);
+      if (pendingLoad) {
+        doLoad(pendingLoad.videoId, pendingLoad.seek, false);
+        pendingLoad = null;
+      }
     });
   </script>
 </body>
