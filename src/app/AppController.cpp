@@ -85,9 +85,41 @@ QString nativeRecorderResolutionText()
 // min/max ranges, so VodLink uses the matching H.264 recommendation clamped
 // into the HEVC/AV1 range. This preserves quality while staying inside
 // Google's current ingest guidance.
+int youtubeQualityTierHeight(const QSize &size)
+{
+    const int width = size.width();
+    const int height = size.height();
+    if (width <= 0 || height <= 0) {
+        return 1080;
+    }
+
+    // Keep the OBS canvas exact, but choose YouTube's CDN ladder only by
+    // total pixels. Pick the first standard tier whose 16:9 pixel count is
+    // >= the selected canvas. This handles odd formats without cropping or
+    // padding: 2560x1080 => 1440p, 3440x1440 => 2160p. 2160p is the hard cap.
+    const long long pixels = 1LL * width * height;
+
+    if (pixels <= 1LL * 640 * 360) {
+        return 360;
+    }
+    if (pixels <= 1LL * 854 * 480) {
+        return 480;
+    }
+    if (pixels <= 1LL * 1280 * 720) {
+        return 720;
+    }
+    if (pixels <= 1LL * 1920 * 1080) {
+        return 1080;
+    }
+    if (pixels <= 1LL * 2560 * 1440) {
+        return 1440;
+    }
+    return 2160;
+}
+
 int youtubeRecommendedBitrateKbps(const QSize &size, int fps, const QString &encoder)
 {
-    const int height = size.height();
+    const int height = youtubeQualityTierHeight(size);
     const bool highFps = fps >= 50;
     const QString e = encoder.toLower();
     const bool efficientCodec = e.contains(QStringLiteral("av1"))

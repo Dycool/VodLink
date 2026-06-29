@@ -504,10 +504,41 @@ bool isEfficientCodec(const QString &encoderText)
 // YouTube's recommended ingest bitrate (kbps) for a resolution/frame rate.
 // Uses the H.264 "Recommended" column; for AV1/HEVC it clamps into the lower
 // AV1/H.265 min–max range. See YouTube Live encoder settings.
-int recommendedBitrateKbps(const QString &resolution, int fps, bool efficientCodec)
+int youtubeQualityTierHeight(const QString &resolution)
 {
     const QStringList parts = resolution.split(QLatin1Char('x'));
+    const int width = parts.size() == 2 ? parts.at(0).toInt() : 1920;
     const int height = parts.size() == 2 ? parts.at(1).toInt() : 1080;
+    if (width <= 0 || height <= 0) {
+        return 1080;
+    }
+
+    // Same tier logic as AppController/YouTubeLiveClient: exact OBS canvas,
+    // YouTube ladder selected by total pixels, rounded up to the first
+    // standard 16:9 tier that can contain that many pixels. 2160p is the cap.
+    const long long pixels = 1LL * width * height;
+
+    if (pixels <= 1LL * 640 * 360) {
+        return 360;
+    }
+    if (pixels <= 1LL * 854 * 480) {
+        return 480;
+    }
+    if (pixels <= 1LL * 1280 * 720) {
+        return 720;
+    }
+    if (pixels <= 1LL * 1920 * 1080) {
+        return 1080;
+    }
+    if (pixels <= 1LL * 2560 * 1440) {
+        return 1440;
+    }
+    return 2160;
+}
+
+int recommendedBitrateKbps(const QString &resolution, int fps, bool efficientCodec)
+{
+    const int height = youtubeQualityTierHeight(resolution);
     const bool high = fps >= 50;
 
     int h264 = 12000; // 1080p60 default

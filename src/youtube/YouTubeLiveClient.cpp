@@ -288,6 +288,49 @@ static bool videoStatusMatchesVodLinkDefaults(const QJsonObject &status)
            && !status.value(QStringLiteral("selfDeclaredMadeForKids")).toBool(false);
 }
 
+int youtubeQualityTierHeightForFrame(int width, int height)
+{
+    if (width <= 0 || height <= 0) {
+        return 1080;
+    }
+
+    // OBS still sends the exact canvas size. For YouTube's CDN quality ladder,
+    // only compare the selected canvas pixel count with the standard 16:9 tiers
+    // and round upward. Examples: 2560x1080 => 1440p,
+    // 3440x1440 => 2160p. 2160p is the hard cap.
+    const long long pixels = 1LL * width * height;
+
+    if (pixels <= 1LL * 640 * 360) {
+        return 360;
+    }
+    if (pixels <= 1LL * 854 * 480) {
+        return 480;
+    }
+    if (pixels <= 1LL * 1280 * 720) {
+        return 720;
+    }
+    if (pixels <= 1LL * 1920 * 1080) {
+        return 1080;
+    }
+    if (pixels <= 1LL * 2560 * 1440) {
+        return 1440;
+    }
+    return 2160;
+}
+
+QString youtubeCdnResolutionForFrame(int width, int height)
+{
+    switch (youtubeQualityTierHeightForFrame(width, height)) {
+    case 2160: return QStringLiteral("2160p");
+    case 1440: return QStringLiteral("1440p");
+    case 1080: return QStringLiteral("1080p");
+    case 720: return QStringLiteral("720p");
+    case 480: return QStringLiteral("480p");
+    case 360:
+    default: return QStringLiteral("360p");
+    }
+}
+
 YouTubeLiveClient::YouTubeLiveClient(QObject *parent)
     : QObject(parent)
 {
@@ -327,40 +370,7 @@ void YouTubeLiveClient::setStreamSettings(const QString &resolution, int fps)
         }
     }
 
-    const bool hasExactSize = width > 0 && height > 0;
-    const qint64 aspectDelta = hasExactSize
-        ? (static_cast<qint64>(width) * 9) - (static_cast<qint64>(height) * 16)
-        : 0;
-    const bool standardAspect = hasExactSize && aspectDelta >= -16 && aspectDelta <= 16;
-
-    // YouTube's liveStream.cdn.resolution is a height tier, not an arbitrary
-    // WxH string.  For standard 16:9 sizes, advertise the matching tier.  For
-    // ultrawide/custom sizes such as 3440x1440, use variable/variable so the
-    // ingest is auto-detected from the actual OBS encoder output instead of
-    // being squeezed into the nearest 16:9 tier (which can show up as e.g.
-    // 2560x1072 in YouTube's player).
-    if (hasExactSize && !standardAspect) {
-        m_resolution = QStringLiteral("variable");
-        m_frameRate = QStringLiteral("variable");
-        return;
-    }
-
-    if (height >= 2160) {
-        m_resolution = QStringLiteral("2160p");
-    } else if (height >= 1440) {
-        m_resolution = QStringLiteral("1440p");
-    } else if (height >= 1080) {
-        m_resolution = QStringLiteral("1080p");
-    } else if (height >= 720) {
-        m_resolution = QStringLiteral("720p");
-    } else if (height >= 480) {
-        m_resolution = QStringLiteral("480p");
-    } else if (height >= 360) {
-        m_resolution = QStringLiteral("360p");
-    } else {
-        m_resolution = QStringLiteral("1080p");
-    }
-
+    m_resolution = youtubeCdnResolutionForFrame(width, height);
     m_frameRate = fps == 30 ? QStringLiteral("30fps") : QStringLiteral("60fps");
 }
 
