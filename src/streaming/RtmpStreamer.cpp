@@ -3,7 +3,9 @@
 #include "app/DebugLog.h"
 
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QList>
@@ -12,6 +14,8 @@
 #include <QProcessEnvironment>
 #include <QSize>
 #include <QStringList>
+#include <QThread>
+#include <QTimer>
 
 #if defined(Q_OS_WIN)
 #include <QFileInfo>
@@ -274,13 +278,12 @@ bool splitRtmpUrl(const QUrl &url, QString *server, QString *key)
 QStringList videoSourceCandidates(RtmpStreamer::CaptureMode mode)
 {
 #if defined(Q_OS_WIN)
-    // Streamlabs/OBS expose Game Capture as the primary game video source.
-    // Window Capture is still useful for games/apps that OBS lists as normal
-    // windows, but fullscreen/borderless games such as CS2 often do not appear
-    // in the Window Capture property list.  In that case Game Capture's
-    // any_fullscreen mode is the OBS-native path; do not fall back to desktop.
+    // Use the least invasive OBS path first when a real window selector exists.
+    // Some anti-cheat games render black through Game Capture even though OBS'
+    // Windows Graphics Capture window source works normally.  Game Capture stays
+    // as the fallback for exclusive fullscreen / not-yet-listed windows.
     if (mode == RtmpStreamer::CaptureMode::GameWindow) {
-        return {QStringLiteral("game_capture"), QStringLiteral("window_capture")};
+        return {QStringLiteral("window_capture"), QStringLiteral("game_capture")};
     }
     return {QStringLiteral("monitor_capture")};
 #elif defined(Q_OS_MACOS) || defined(Q_OS_MAC)
@@ -319,7 +322,24 @@ QStringList audioSourceCandidates(RtmpStreamer::AudioCaptureSource source)
         // PipeWire may expose application audio as part of the capture source.
         return {};
     }
-    return {QStringLiteral("pulse_output_capture"), QStringLiteral("pulse_input_capture")};
+    return {QStringLiteral("pulse_output_capture")};
+#endif
+}
+
+QStringList microphoneSourceCandidates(RtmpStreamer::AudioCaptureSource source)
+{
+    // Only the modes that intentionally include external/system audio should
+    // include the default microphone. Keep Game only (Beta) as app-audio-only.
+    if (source == RtmpStreamer::AudioCaptureSource::GameOnly) {
+        return {};
+    }
+#if defined(Q_OS_WIN)
+    return {QStringLiteral("wasapi_input_capture")};
+#elif defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    return {QStringLiteral("coreaudio_input_capture"),
+            QStringLiteral("coreaudio_input_capture_v2")};
+#else
+    return {QStringLiteral("pulse_input_capture")};
 #endif
 }
 
@@ -903,9 +923,10 @@ ObsDataPtr makeVideoSourceSettings(const QString &sourceId, RtmpStreamer::Captur
 ObsDataPtr makeAudioSourceSettings(const QString &sourceId, const QString &obsWindowSpec)
 {
     ObsDataPtr settings(obs_data_create());
-    if (sourceId == QStringLiteral("wasapi_output_capture")) {
+    if (sourceId == QStringLiteral("wasapi_output_capture")
+        || sourceId == QStringLiteral("wasapi_input_capture")) {
         obs_data_set_string(settings.get(), "device_id", "default");
-        // OBS defaults desktop audio to device timestamps. In VodLink's private
+        // OBS defaults WASAPI sources to device timestamps. In VodLink's private
         // auto-record pipeline that can push a large initial audio buffer while
         // the scene is being activated; use OBS wall-clock timing for stable
         // one-shot capture startup instead.
@@ -916,7 +937,8 @@ ObsDataPtr makeAudioSourceSettings(const QString &sourceId, const QString &obsWi
             obs_data_set_string(settings.get(), "window", hint.constData());
             obs_data_set_int(settings.get(), "priority", kObsWindowPriorityExe);
         }
-    } else if (sourceId.startsWith(QStringLiteral("pulse_"))) {
+    } else if (sourceId.startsWith(QStringLiteral("pulse_"))
+               || sourceId.startsWith(QStringLiteral("coreaudio_input_capture"))) {
         obs_data_set_string(settings.get(), "device_id", "default");
     }
     return settings;
@@ -956,28 +978,33 @@ ObsDataPtr makeVideoEncoderSettings(const QString &encoderId, int bitrateKbps, i
     // encoders, but keeping them backend-grouped avoids cross-platform nonsense
     // such as trying VideoToolbox settings on Windows or AMF settings on macOS.
     if (isNvencEncoder(encoderId)) {
-        obs_data_set_string(settings.get(), "preset", "quality");
-        obs_data_set_string(settings.get(), "preset2", "p5");
-        obs_data_set_string(settings.get(), "tune", "hq");
-        obs_data_set_string(settings.get(), "multipass", "qres");
-        obs_data_set_string(settings.get(), "multiPass", "qres");
-        obs_data_set_bool(settings.get(), "psycho_aq", true);
-        obs_data_set_bool(settings.get(), "spatial_aq", true);
-        obs_data_set_bool(settings.get(), "temporal_aq", true);
+        // Prioritize frame pacing over expensive quality passes. At 3440x1440
+        // 60fps while the game is also using the GPU, quarter-res multipass and
+        // temporal AQ can be enough to make the ingest look stuttery even when
+        // OBS reports the stream as active. Keep CBR/keyframes strict, but use a
+        // one-pass balanced live preset.
+        obs_data_set_string(settings.get(), "preset", "performance");
+        obs_data_set_string(settings.get(), "preset2", "p4");
+        obs_data_set_string(settings.get(), "tune", "ll");
+        obs_data_set_string(settings.get(), "multipass", "disabled");
+        obs_data_set_string(settings.get(), "multiPass", "disabled");
+        obs_data_set_bool(settings.get(), "psycho_aq", false);
+        obs_data_set_bool(settings.get(), "spatial_aq", false);
+        obs_data_set_bool(settings.get(), "temporal_aq", false);
         obs_data_set_bool(settings.get(), "lookahead", false);
         obs_data_set_int(settings.get(), "gpu", 0);
     } else if (isAmfEncoder(encoderId)) {
-        obs_data_set_string(settings.get(), "preset", "quality");
-        obs_data_set_string(settings.get(), "quality_preset", "quality");
-        obs_data_set_string(settings.get(), "usage", "transcoding");
+        obs_data_set_string(settings.get(), "preset", "speed");
+        obs_data_set_string(settings.get(), "quality_preset", "speed");
+        obs_data_set_string(settings.get(), "usage", "lowlatency");
         obs_data_set_bool(settings.get(), "preanalysis", false);
-        obs_data_set_bool(settings.get(), "vbaq", true);
+        obs_data_set_bool(settings.get(), "vbaq", false);
         obs_data_set_bool(settings.get(), "lookahead", false);
     } else if (isQsvEncoder(encoderId)) {
-        obs_data_set_string(settings.get(), "target_usage", "balanced");
-        obs_data_set_string(settings.get(), "usage", "balanced");
+        obs_data_set_string(settings.get(), "target_usage", "speed");
+        obs_data_set_string(settings.get(), "usage", "speed");
         obs_data_set_bool(settings.get(), "low_power", true);
-        obs_data_set_bool(settings.get(), "mbbrc", true);
+        obs_data_set_bool(settings.get(), "mbbrc", false);
         obs_data_set_bool(settings.get(), "lookahead", false);
     } else if (isVideoToolboxEncoder(encoderId)) {
         obs_data_set_bool(settings.get(), "allow_sw", false);
@@ -1436,12 +1463,14 @@ struct RtmpStreamer::ObsHandles
     obs_scene_t *scene = nullptr;
     obs_source_t *videoSource = nullptr;
     obs_source_t *audioSource = nullptr;
+    obs_source_t *micSource = nullptr;
     obs_encoder_t *videoEncoder = nullptr;
     obs_encoder_t *audioEncoder = nullptr;
     obs_service_t *service = nullptr;
     obs_output_t *output = nullptr;
     QString videoSourceId;
     QString audioSourceId;
+    QString micSourceId;
     QString videoEncoderId;
     QString audioEncoderId;
     VideoColorMode colorMode = VideoColorMode::Sdr709;
@@ -1594,15 +1623,56 @@ bool RtmpStreamer::start(const QUrl &ingestUrl, CaptureMode mode, AudioCaptureSo
 void RtmpStreamer::stop()
 {
     DebugLog::writeCategory(QStringLiteral("streamer"),
-                            QStringLiteral("stop requested running=%1 hasObs=%2")
+                            QStringLiteral("stop requested running=%1 stopping=%2 hasObs=%3")
                                 .arg(m_running ? QStringLiteral("true") : QStringLiteral("false"),
+                                     m_stopping ? QStringLiteral("true") : QStringLiteral("false"),
                                      m_obs ? QStringLiteral("true") : QStringLiteral("false")));
     if (!m_running && !m_obs) {
+        return;
+    }
+    if (m_stopping) {
         return;
     }
 
     m_stopping = true;
     m_diagnosticsTimer.stop();
+
+    if (m_obs && m_obs->output != nullptr && obs_output_active(m_obs->output)) {
+        // Do not force-stop a healthy RTMP output.  force_stop() tears the socket
+        // down immediately and can drop the final GOP/audio packets, which makes
+        // YouTube archives miss the last seconds.  Ask OBS to stop gracefully and
+        // keep the Qt event loop alive until OBS emits its output stop signal.
+        DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("graceful obs_output_stop requested"));
+        QEventLoop waitLoop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        connect(this, &RtmpStreamer::stopped, &waitLoop, &QEventLoop::quit, Qt::QueuedConnection);
+        connect(&timeout, &QTimer::timeout, &waitLoop, &QEventLoop::quit);
+        obs_output_stop(m_obs->output);
+        timeout.start(10000);
+        waitLoop.exec();
+
+        if (!m_running) {
+            return;
+        }
+
+        DebugLog::writeCategory(QStringLiteral("OBS"),
+                                QStringLiteral("graceful stop timed out; forcing OBS output stop"));
+        if (m_obs && m_obs->output != nullptr && obs_output_active(m_obs->output)) {
+            obs_output_force_stop(m_obs->output);
+            QEventLoop forceLoop;
+            QTimer forceTimeout;
+            forceTimeout.setSingleShot(true);
+            connect(this, &RtmpStreamer::stopped, &forceLoop, &QEventLoop::quit, Qt::QueuedConnection);
+            connect(&forceTimeout, &QTimer::timeout, &forceLoop, &QEventLoop::quit);
+            forceTimeout.start(2500);
+            forceLoop.exec();
+            if (!m_running) {
+                return;
+            }
+        }
+    }
+
     cleanupObs();
     const bool wasRunning = m_running;
     m_running = false;
@@ -1849,6 +1919,27 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
         DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("window selector result=%1 details=%2")
                                 .arg(obsWindowSpec.isEmpty() ? QStringLiteral("<empty>") : obsWindowSpec, diagnostic));
         if (obsWindowSpec.isEmpty()) {
+            // Game detection can fire as soon as the process exists, before OBS'
+            // window lists have caught up.  Give WGC/window capture a short
+            // chance to bind before falling back to Game Capture any_fullscreen;
+            // that avoids the common black-frame path for anti-cheat games.
+            for (int attempt = 1; attempt <= 20 && obsWindowSpec.isEmpty(); ++attempt) {
+                QThread::msleep(250);
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                QString retryDiagnostic;
+                obsWindowSpec = resolveObsWindowSpecFromProperties(selectorSources, m_windowHints, &retryDiagnostic);
+                if (!obsWindowSpec.isEmpty()) {
+                    obsAudioWindowSpec = obsWindowSpec;
+                    DebugLog::writeCategory(QStringLiteral("OBS"),
+                                            QStringLiteral("window selector resolved after retry %1: %2 details=%3")
+                                                .arg(attempt)
+                                                .arg(obsWindowSpec, retryDiagnostic));
+                    break;
+                }
+                diagnostic = retryDiagnostic;
+            }
+        }
+        if (obsWindowSpec.isEmpty()) {
             if (audioSource == AudioCaptureSource::GameOnly) {
                 obsAudioWindowSpec = obsProcessAudioSelectorFromExecutableHints(m_windowHints);
                 if (!obsAudioWindowSpec.isEmpty()) {
@@ -1899,6 +1990,14 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
             DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("video source %1 not registered").arg(sourceId));
             continue;
         }
+#if defined(Q_OS_WIN)
+        if (mode == CaptureMode::GameWindow && sourceId == QStringLiteral("window_capture")
+            && obsWindowSpec.isEmpty()) {
+            DebugLog::writeCategory(QStringLiteral("OBS"),
+                                    QStringLiteral("window_capture skipped because OBS did not expose a matching game window yet"));
+            continue;
+        }
+#endif
         ObsDataPtr settings = makeVideoSourceSettings(sourceId, mode, audioSource, m_colorMode, obsWindowSpec, obsMonitorId);
         const QByteArray id = utf8(sourceId);
         m_obs->videoSource = obs_source_create_private(id.constData(), "VodLink Video", settings.get());
@@ -1951,6 +2050,28 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
         }
     }
 
+    for (const QString &sourceId : microphoneSourceCandidates(audioSource)) {
+        DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("trying microphone source %1").arg(sourceId));
+        if (!registeredInputs.contains(sourceId)) {
+            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source %1 not registered").arg(sourceId));
+            continue;
+        }
+        ObsDataPtr settings = makeAudioSourceSettings(sourceId, {});
+        const QByteArray id = utf8(sourceId);
+        m_obs->micSource = obs_source_create_private(id.constData(), "VodLink Microphone", settings.get());
+        if (m_obs->micSource != nullptr && addSourceToScene(m_obs->scene, m_obs->micSource, m_outputSize)) {
+            obs_source_set_audio_mixers(m_obs->micSource, 1);
+            obs_source_set_monitoring_type(m_obs->micSource, OBS_MONITORING_TYPE_NONE);
+            m_obs->micSourceId = sourceId;
+            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source created %1").arg(sourceId));
+            break;
+        }
+        if (m_obs->micSource != nullptr) {
+            obs_source_release(m_obs->micSource);
+            m_obs->micSource = nullptr;
+        }
+    }
+
 #if defined(Q_OS_WIN)
     if (audioSource == AudioCaptureSource::GameOnly && m_obs->audioSource == nullptr) {
         if (error != nullptr) {
@@ -1969,9 +2090,11 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
     // borrowed pointer here drops the caller-owned scene reference instead and
     // makes cleanup destroy the source while obs_canvas_remove_source() is
     // still detaching it.
-    DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("createScene complete canvas=%1x%2 video=%3 audio=%4")
+    DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("createScene complete canvas=%1x%2 video=%3 audio=%4 mic=%5")
                             .arg(m_outputSize.width()).arg(m_outputSize.height())
-                            .arg(m_obs->videoSourceId, m_obs->audioSourceId.isEmpty() ? QStringLiteral("none") : m_obs->audioSourceId));
+                            .arg(m_obs->videoSourceId,
+                                 m_obs->audioSourceId.isEmpty() ? QStringLiteral("none") : m_obs->audioSourceId,
+                                 m_obs->micSourceId.isEmpty() ? QStringLiteral("none") : m_obs->micSourceId));
     return true;
 }
 
@@ -2186,6 +2309,10 @@ void RtmpStreamer::releaseObsObjects()
         obs_encoder_release(m_obs->videoEncoder);
         m_obs->videoEncoder = nullptr;
     }
+    if (m_obs->micSource != nullptr) {
+        obs_source_release(m_obs->micSource);
+        m_obs->micSource = nullptr;
+    }
     if (m_obs->audioSource != nullptr) {
         obs_source_release(m_obs->audioSource);
         m_obs->audioSource = nullptr;
@@ -2228,6 +2355,7 @@ void RtmpStreamer::handleOutputStopped(int code)
     releaseObsObjects();
     m_obs.reset();
     m_running = false;
+    m_stopping = false;
     m_startedSignalSent = false;
 
     if (!intentional) {
@@ -2246,9 +2374,16 @@ QString RtmpStreamer::diagnosticSummary() const
     const int dropped = obs_output_get_frames_dropped(m_obs->output);
     const quint64 bytes = static_cast<quint64>(obs_output_get_total_bytes(m_obs->output));
     const float congestion = obs_output_get_congestion(m_obs->output);
-    return QStringLiteral("local: OBS RTMP active; color=%9 video=%1 audio=%2 encoder=%3/%4 frames=%5 dropped=%6 bytes=%7 congestion=%8%")
+    const QString programAudio = activeAudioSourceId().isEmpty()
+                                     ? QStringLiteral("none/private-source-audio")
+                                     : activeAudioSourceId();
+    const QString microphoneAudio = (!m_obs || m_obs->micSourceId.isEmpty())
+                                      ? QStringLiteral("none")
+                                      : m_obs->micSourceId;
+    return QStringLiteral("local: OBS RTMP active; color=%10 video=%1 audio=%2 mic=%3 encoder=%4/%5 frames=%6 dropped=%7 bytes=%8 congestion=%9%")
         .arg(activeVideoSourceId().isEmpty() ? QStringLiteral("unknown") : activeVideoSourceId(),
-             activeAudioSourceId().isEmpty() ? QStringLiteral("none/private-source-audio") : activeAudioSourceId(),
+             programAudio,
+             microphoneAudio,
              activeVideoEncoderId().isEmpty() ? QStringLiteral("unknown") : activeVideoEncoderId(),
              activeAudioEncoderId().isEmpty() ? QStringLiteral("unknown") : activeAudioEncoderId())
         .arg(frames)

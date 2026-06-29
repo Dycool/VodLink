@@ -62,16 +62,23 @@
       return players.get(videoId) || null;
     }
 
+    function destroyPlayer(videoId) {
+      const slot = slotFor(videoId);
+      if (!slot) return;
+      try { if (slot.player && slot.player.destroy) slot.player.destroy(); } catch (_) {}
+      try { if (slot.div) slot.div.remove(); } catch (_) {}
+      players.delete(videoId);
+      if (activeId === videoId) activeId = '';
+    }
+
     function evictCache() {
       if (players.size <= maxCachedPlayers) return;
       const candidates = Array.from(players.entries())
         .filter(([id]) => id !== activeId)
         .sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
       while (players.size > maxCachedPlayers && candidates.length) {
-        const [id, slot] = candidates.shift();
-        try { slot.player.destroy(); } catch (_) {}
-        try { slot.div.remove(); } catch (_) {}
-        players.delete(id);
+        const [id] = candidates.shift();
+        destroyPlayer(id);
       }
     }
 
@@ -186,9 +193,16 @@
       }
       if (lastLoad && retryCount < 20) {
         retryCount += 1;
-        const waitMs = retryCount < 4 ? 5000 : 15000;
-        showOverlay('YouTube says this VOD is not embeddable yet (error ' + code
-          + '). Retrying in ' + Math.round(waitMs / 1000) + 's...');
+        const waitMs = code === '5' && retryCount < 6 ? 1500 : (retryCount < 4 ? 5000 : 15000);
+        const reason = code === '5'
+          ? 'YouTube\'s HTML5 player failed to initialize in the embedded browser'
+          : 'YouTube says this VOD is not embeddable yet';
+        showOverlay(reason + ' (error ' + code + '). Rebuilding player in '
+          + Math.round(waitMs / 1000) + 's...');
+        // A failed YouTube iframe often stays poisoned; seeking/retrying the same
+        // YT.Player instance just replays the same error.  Destroy the iframe so
+        // the retry gets a fresh player, media pipeline, and request chain.
+        destroyPlayer(videoId);
         if (retryTimer) clearTimeout(retryTimer);
         retryTimer = setTimeout(() => {
           retryTimer = null;

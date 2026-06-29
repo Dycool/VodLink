@@ -300,12 +300,24 @@ void YouTubeLiveClient::setStreamSettings(const QString &resolution, int fps)
         }
     }
 
-    Q_UNUSED(width);
+    const bool hasExactSize = width > 0 && height > 0;
+    const qint64 aspectDelta = hasExactSize
+        ? (static_cast<qint64>(width) * 9) - (static_cast<qint64>(height) * 16)
+        : 0;
+    const bool standardAspect = hasExactSize && aspectDelta >= -16 && aspectDelta <= 16;
 
     // YouTube's liveStream.cdn.resolution is a height tier, not an arbitrary
-    // WxH string. Keep the actual encoder strict to the user-selected WxH, but
-    // advertise the nearest YouTube tier by height so ultrawide 3440x1440 maps
-    // to 1440p instead of accidentally falling back to 1080p.
+    // WxH string.  For standard 16:9 sizes, advertise the matching tier.  For
+    // ultrawide/custom sizes such as 3440x1440, use variable/variable so the
+    // ingest is auto-detected from the actual OBS encoder output instead of
+    // being squeezed into the nearest 16:9 tier (which can show up as e.g.
+    // 2560x1072 in YouTube's player).
+    if (hasExactSize && !standardAspect) {
+        m_resolution = QStringLiteral("variable");
+        m_frameRate = QStringLiteral("variable");
+        return;
+    }
+
     if (height >= 2160) {
         m_resolution = QStringLiteral("2160p");
     } else if (height >= 1440) {
@@ -449,7 +461,10 @@ void YouTubeLiveClient::prepareBroadcast(const QString &game)
          }},
         {QStringLiteral("contentDetails"), QJsonObject {
              {QStringLiteral("enableAutoStart"), true},
-             {QStringLiteral("enableAutoStop"), true},
+             // VodLink stops RTMP gracefully and then completes the broadcast
+             // itself.  Leaving YouTube auto-stop enabled can race that path and
+             // end the archive before the final flushed packets are indexed.
+             {QStringLiteral("enableAutoStop"), false},
              {QStringLiteral("enableDvr"), true},
              {QStringLiteral("recordFromStart"), true},
              {QStringLiteral("enableEmbed"), true},
