@@ -10,10 +10,10 @@
   <link rel="preconnect" href="https://i.ytimg.com">
   <link rel="preconnect" href="https://s.ytimg.com">
   <style>
-    html, body { margin: 0; height: 100%; background: #07080b; overflow: hidden; }
-    #players { position: fixed; inset: 0; background: #07080b; }
-    .playerSlot, .playerSlot iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-    .playerSlot { display: block; opacity: 0; pointer-events: none; background: #07080b; z-index: 0; }
+    html, body { margin: 0; width: 100%; height: 100%; background: #07080b; overflow: hidden; }
+    #players { position: fixed; inset: 0; width: 100vw; height: 100vh; background: #07080b; overflow: hidden; }
+    .playerSlot, .playerSlot iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #07080b; }
+    .playerSlot { display: block; opacity: 0; pointer-events: none; z-index: 0; overflow: hidden; }
     .playerSlot.active { opacity: 1; pointer-events: auto; z-index: 1; }
     #overlay {
       position: fixed; inset: 0; display: none; place-items: center;
@@ -30,7 +30,7 @@
   <script>
     let apiReady = false;
     let bridge = null;
-    let pendingLoad = null;      // { videoId, seek }
+    let pendingLoad = null;      // { videoId, seek, hostIndex }
     let pendingCache = [];       // video ids requested before the API is ready
     let activeId = '';
     let lastLoad = null;
@@ -39,8 +39,9 @@
     let reportTimer = null;
     let apiTimer = null;
     let nextSlot = 1;
-    const players = new Map();   // videoId -> { player, div, ready, pendingSeek, lastUsed }
+    const players = new Map();   // videoId -> { player, div, ready, pendingSeek, lastUsed, hostIndex, raw }
     const maxCachedPlayers = 6;
+    const playerHosts = ['https://www.youtube.com', 'https://www.youtube-nocookie.com'];
     const appOrigin = (window.location.origin && window.location.origin !== 'null')
       ? window.location.origin
       : 'https://vodlink.app';
@@ -56,6 +57,10 @@
       if (Array.isArray(ids)) return ids.map(String).filter(Boolean);
       if (typeof ids === 'string') return ids.split(',').map(s => s.trim()).filter(Boolean);
       try { return Array.from(ids).map(String).filter(Boolean); } catch (_) { return []; }
+    }
+
+    function validYouTubeId(videoId) {
+      return /^[A-Za-z0-9_-]{6,}$/.test(String(videoId || '').trim());
     }
 
     function slotFor(videoId) {
@@ -82,23 +87,36 @@
       }
     }
 
-    function createPlayer(videoId, preferredSeek, autoplay) {
+    function makeSlot(videoId) {
+      const div = document.createElement('div');
+      div.className = 'playerSlot';
+      div.id = 'yt-slot-' + (nextSlot++);
+      document.getElementById('players').appendChild(div);
+      const slot = { player: null, div, ready: false, pendingSeek: 0, lastUsed: Date.now(), hostIndex: 0, raw: false };
+      players.set(videoId, slot);
+      return slot;
+    }
+
+    function createPlayer(videoId, preferredSeek, autoplay, hostIndex) {
+      const host = playerHosts[Math.abs(hostIndex || 0) % playerHosts.length];
       const existing = slotFor(videoId);
-      if (existing) {
+      if (existing && !existing.raw && existing.hostIndex === hostIndex) {
         existing.lastUsed = Date.now();
         if (typeof preferredSeek === 'number') existing.pendingSeek = preferredSeek;
         return existing;
       }
+      if (existing) destroyPlayer(videoId);
 
       const div = document.createElement('div');
       div.className = 'playerSlot';
       div.id = 'yt-slot-' + (nextSlot++);
       document.getElementById('players').appendChild(div);
 
-      const slot = { player: null, div, ready: false, pendingSeek: preferredSeek || 0, lastUsed: Date.now() };
+      const slot = { player: null, div, ready: false, pendingSeek: preferredSeek || 0, lastUsed: Date.now(), hostIndex: hostIndex || 0, raw: false };
       players.set(videoId, slot);
 
       slot.player = new YT.Player(div.id, {
+        host,
         width: '100%', height: '100%', videoId,
         playerVars: {
           autoplay: autoplay ? 1 : 0,
@@ -109,13 +127,8 @@
         events: {
           onReady: function () {
             slot.ready = true;
-            // Hidden cached players are intentionally paused. The iframe/player
-            // instance and YouTube JS state stay warm, making participant switches
-            // much smoother than destroying/reloading one iframe every time.
             if (activeId === videoId) {
               seekAndPlay(videoId, slot.pendingSeek || 0);
-            } else {
-              try { slot.player.pauseVideo(); } catch (_) {}
             }
           },
           onStateChange: function (e) { onStateChange(videoId, e); },
@@ -128,13 +141,43 @@
       return slot;
     }
 
+    function rawEmbedUrl(videoId, seek, hostIndex) {
+      const host = playerHosts[Math.abs(hostIndex || 0) % playerHosts.length];
+      const qs = new URLSearchParams({
+        autoplay: '1', controls: '1', rel: '0', modestbranding: '1', playsinline: '1',
+        fs: '1', start: String(Math.max(0, Math.floor(seek || 0))), origin: appOrigin,
+      });
+      return host + '/embed/' + encodeURIComponent(videoId) + '?' + qs.toString();
+    }
+
+    function createRawIframe(videoId, seek, hostIndex) {
+      destroyPlayer(videoId);
+      const slot = makeSlot(videoId);
+      slot.raw = true;
+      slot.ready = true;
+      slot.pendingSeek = Math.max(0, Number(seek || 0));
+      slot.rawStartedAt = Date.now();
+      slot.hostIndex = hostIndex || 0;
+
+      const iframe = document.createElement('iframe');
+      iframe.src = rawEmbedUrl(videoId, slot.pendingSeek, slot.hostIndex);
+      iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      iframe.allowFullscreen = true;
+      slot.div.appendChild(iframe);
+      setActive(videoId);
+      showOverlay(null);
+      startReporting();
+      return slot;
+    }
+
     function setActive(videoId) {
       players.forEach((slot, id) => {
         if (id === videoId) {
           slot.div.classList.add('active');
         } else {
           slot.div.classList.remove('active');
-          try { slot.player.pauseVideo(); } catch (_) {}
+          try { if (slot.player) slot.player.pauseVideo(); } catch (_) {}
         }
       });
       activeId = videoId;
@@ -142,9 +185,14 @@
 
     function seekAndPlay(videoId, seek) {
       const slot = slotFor(videoId);
-      if (!slot || !slot.player) return;
+      if (!slot) return;
       slot.lastUsed = Date.now();
       const start = Math.max(0, Number(seek || 0));
+      if (slot.raw) {
+        createRawIframe(videoId, start, slot.hostIndex || 0);
+        return;
+      }
+      if (!slot.player) return;
       try {
         if (slot.ready) {
           slot.player.seekTo(start, true);
@@ -175,7 +223,7 @@
       cacheVideos(pendingCache);
       pendingCache = [];
       if (pendingLoad) {
-        doLoad(pendingLoad.videoId, pendingLoad.seek, false);
+        doLoad(pendingLoad.videoId, pendingLoad.seek, false, pendingLoad.hostIndex || 0);
         pendingLoad = null;
       }
     };
@@ -186,27 +234,39 @@
 
     function onPlayerError(videoId, e) {
       const code = e && typeof e.data !== 'undefined' ? String(e.data) : 'unknown';
-      if (videoId !== activeId) return;
+      // A hidden/preloaded iframe that errors should never be reused later. This
+      // was the common poison path for YouTube error 5: cache first, fail hidden,
+      // then clicking the VOD reused the already-broken player.
+      if (videoId !== activeId) {
+        destroyPlayer(videoId);
+        return;
+      }
       if (code === '153') {
         showOverlay('YouTube rejected the embedded player configuration (error 153).');
         return;
       }
+
       if (lastLoad && retryCount < 20) {
         retryCount += 1;
-        const waitMs = code === '5' && retryCount < 6 ? 1500 : (retryCount < 4 ? 5000 : 15000);
-        const reason = code === '5'
+        const isHtml5Error = code === '5';
+        if (isHtml5Error && retryCount >= 5) {
+          showOverlay('YouTube\'s IFrame API kept returning HTML5 error 5. Trying a plain embed iframe...');
+          createRawIframe(lastLoad.videoId, lastLoad.seek, retryCount % playerHosts.length);
+          return;
+        }
+
+        const waitMs = isHtml5Error ? 1500 : (retryCount < 4 ? 5000 : 15000);
+        const nextHost = isHtml5Error ? ((lastLoad.hostIndex || 0) + 1) : (lastLoad.hostIndex || 0);
+        const reason = isHtml5Error
           ? 'YouTube\'s HTML5 player failed to initialize in the embedded browser'
           : 'YouTube says this VOD is not embeddable yet';
         showOverlay(reason + ' (error ' + code + '). Rebuilding player in '
           + Math.round(waitMs / 1000) + 's...');
-        // A failed YouTube iframe often stays poisoned; seeking/retrying the same
-        // YT.Player instance just replays the same error.  Destroy the iframe so
-        // the retry gets a fresh player, media pipeline, and request chain.
         destroyPlayer(videoId);
         if (retryTimer) clearTimeout(retryTimer);
         retryTimer = setTimeout(() => {
           retryTimer = null;
-          if (lastLoad) doLoad(lastLoad.videoId, lastLoad.seek, true);
+          if (lastLoad) doLoad(lastLoad.videoId, lastLoad.seek, true, nextHost);
         }, waitMs);
         return;
       }
@@ -230,7 +290,13 @@
       if (reportTimer) return;
       reportTimer = setInterval(() => {
         const slot = slotFor(activeId);
-        if (bridge && slot && slot.player && slot.player.getCurrentTime) {
+        if (!bridge || !slot) return;
+        if (slot.raw) {
+          const estimate = (slot.pendingSeek || 0) + Math.max(0, Date.now() - (slot.rawStartedAt || Date.now())) / 1000.0;
+          try { bridge.onTimeUpdate(estimate); } catch (_) {}
+          return;
+        }
+        if (slot.player && slot.player.getCurrentTime) {
           try { bridge.onTimeUpdate(slot.player.getCurrentTime() || 0); } catch (_) {}
         }
       }, 200);
@@ -239,37 +305,37 @@
       if (reportTimer) { clearInterval(reportTimer); reportTimer = null; }
     }
 
-    function doLoad(videoId, seek, isRetry) {
+    function doLoad(videoId, seek, isRetry, hostIndex) {
+      videoId = String(videoId || '').trim();
       if (!videoId) { showOverlay('Select a VOD to watch'); return; }
+      if (!validYouTubeId(videoId)) { showOverlay('This VOD has an invalid YouTube id.'); return; }
       const start = Math.max(0, Number(seek || 0));
       if (!apiReady || typeof YT === 'undefined' || !YT.Player) {
-        pendingLoad = { videoId, seek: start };
+        pendingLoad = { videoId, seek: start, hostIndex: hostIndex || 0 };
         return;
       }
       if (!isRetry) {
         retryCount = 0;
         if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
       }
-      lastLoad = { videoId, seek: start };
+      lastLoad = { videoId, seek: start, hostIndex: hostIndex || 0 };
       showOverlay(null);
-      const slot = createPlayer(videoId, start, true);
+      createPlayer(videoId, start, true, hostIndex || 0);
       setActive(videoId);
       seekAndPlay(videoId, start);
     }
 
     function cacheVideos(ids) {
-      const list = normalizeIds(ids);
-      if (!apiReady || typeof YT === 'undefined' || !YT.Player) {
-        pendingCache = Array.from(new Set(pendingCache.concat(list)));
-        return;
-      }
-      list.forEach(id => {
-        if (id && id !== activeId) createPlayer(id, 0, false);
-      });
+      // Do not create hidden YouTube players here. Hidden preloading looked smooth
+      // on paper but caused exactly the bad behavior users saw: YouTube error 5 can
+      // happen while the iframe is inactive, and reusing that poisoned player later
+      // keeps the embed broken. Keeping successful players warm after first play is
+      // safe; eagerly instantiating unseen iframes is not.
+      pendingCache = Array.from(new Set(pendingCache.concat(normalizeIds(ids))));
     }
 
     window.vodlink = {
-      loadVideo: function (videoId, seek) { doLoad(videoId, seek, false); },
+      loadVideo: function (videoId, seek) { doLoad(videoId, seek, false, 0); },
       seek: function (seconds) { seekAndPlay(activeId, Math.max(0, Number(seconds || 0))); },
       play: function () { const s = slotFor(activeId); if (s && s.player) s.player.playVideo(); },
       pause: function () { const s = slotFor(activeId); if (s && s.player) s.player.pauseVideo(); },

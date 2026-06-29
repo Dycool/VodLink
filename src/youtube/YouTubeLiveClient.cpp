@@ -261,6 +261,33 @@ bool isRateLimitApiError(const QJsonObject &apiError)
 }
 } // namespace
 
+static QJsonObject vodLinkSafeVideoStatus()
+{
+    // YouTube Data API v3 does not expose per-video switches for comments,
+    // ratings, live-chat creation, or Clips availability. These are the closest
+    // writable video-status defaults VodLink can enforce automatically:
+    //   - unlisted: linkable/embeddable, but not searchable or channel-listed;
+    //   - embeddable: required by the in-app player;
+    //   - publicStatsViewable=false: hides extended public stats/ratings UI;
+    //   - selfDeclaredMadeForKids=false: keeps Clips eligible when the channel's
+    //     own Clips settings allow them. Marking as made-for-kids would disable
+    //     comments, but it also disables Clips, so do not use that as a hack.
+    return QJsonObject {
+        {QStringLiteral("privacyStatus"), QStringLiteral("unlisted")},
+        {QStringLiteral("selfDeclaredMadeForKids"), false},
+        {QStringLiteral("embeddable"), true},
+        {QStringLiteral("publicStatsViewable"), false}
+    };
+}
+
+static bool videoStatusMatchesVodLinkDefaults(const QJsonObject &status)
+{
+    return status.value(QStringLiteral("privacyStatus")).toString() == QStringLiteral("unlisted")
+           && status.value(QStringLiteral("embeddable")).toBool(true)
+           && !status.value(QStringLiteral("publicStatsViewable")).toBool(true)
+           && !status.value(QStringLiteral("selfDeclaredMadeForKids")).toBool(false);
+}
+
 YouTubeLiveClient::YouTubeLiveClient(QObject *parent)
     : QObject(parent)
 {
@@ -717,9 +744,7 @@ void YouTubeLiveClient::updateVideoStatusForEmbedding(const QString &videoId, co
         return;
     }
 
-    const QString privacy = existingStatus.value(QStringLiteral("privacyStatus")).toString();
-    const bool embeddable = existingStatus.value(QStringLiteral("embeddable")).toBool(true);
-    if (privacy == QStringLiteral("unlisted") && embeddable) {
+    if (videoStatusMatchesVodLinkDefaults(existingStatus)) {
         return;
     }
 
@@ -729,12 +754,10 @@ void YouTubeLiveClient::updateVideoStatusForEmbedding(const QString &videoId, co
     // liveBroadcast.contentDetails.enableEmbed alone is not reliable enough for
     // the archived VOD. Keep this object to writable status fields only; copying
     // YouTube's read-only status fields (uploadStatus, failureReason, etc.) makes
-    // videos.update fail.
-    const QJsonObject status {
-        {QStringLiteral("privacyStatus"), QStringLiteral("unlisted")},
-        {QStringLiteral("selfDeclaredMadeForKids"), false},
-        {QStringLiteral("embeddable"), true}
-    };
+    // videos.update fail. Comments/live-chat/Clips switches are not writable via
+    // Data API v3; publicStatsViewable=false is the supported privacy knob for
+    // hiding the extended public stats/ratings surface while preserving Clips.
+    const QJsonObject status = vodLinkSafeVideoStatus();
 
     QUrlQuery updateQuery;
     updateQuery.addQueryItem(QStringLiteral("part"), QStringLiteral("status"));
@@ -1002,11 +1025,7 @@ void YouTubeLiveClient::updateVodLinkMetadata(const Vod &vod, const QVector<VodC
             updatedSnippet.insert(QStringLiteral("tags"), snippet.value(QStringLiteral("tags")).toArray());
         }
 
-        const QJsonObject updatedStatus {
-            {QStringLiteral("privacyStatus"), QStringLiteral("unlisted")},
-            {QStringLiteral("selfDeclaredMadeForKids"), false},
-            {QStringLiteral("embeddable"), true}
-        };
+        const QJsonObject updatedStatus = vodLinkSafeVideoStatus();
 
         QUrlQuery updateQuery;
         updateQuery.addQueryItem(QStringLiteral("part"), QStringLiteral("snippet,status"));

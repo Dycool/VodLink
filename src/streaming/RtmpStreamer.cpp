@@ -965,8 +965,10 @@ ObsDataPtr makeVideoEncoderSettings(const QString &encoderId, int bitrateKbps, i
     const VideoCodecChoice codec = codecFromEncoderId(encoderId);
     obs_data_set_string(settings.get(), "profile", hdr ? "main10"
                                                         : codec == VideoCodecChoice::H264 ? "high" : "main");
-    obs_data_set_int(settings.get(), "bf", 2);
-    obs_data_set_int(settings.get(), "bframes", 2);
+    // Prefer live frame pacing over compression efficiency. B-frames add reorder
+    // delay and can make 60fps desktop/game capture feel uneven on busy GPUs.
+    obs_data_set_int(settings.get(), "bf", 0);
+    obs_data_set_int(settings.get(), "bframes", 0);
     obs_data_set_int(settings.get(), "refs", 1);
     obs_data_set_int(settings.get(), "ref", 1);
     obs_data_set_bool(settings.get(), "cabac", true);
@@ -984,8 +986,8 @@ ObsDataPtr makeVideoEncoderSettings(const QString &encoderId, int bitrateKbps, i
         // OBS reports the stream as active. Keep CBR/keyframes strict, but use a
         // one-pass balanced live preset.
         obs_data_set_string(settings.get(), "preset", "performance");
-        obs_data_set_string(settings.get(), "preset2", "p4");
-        obs_data_set_string(settings.get(), "tune", "ll");
+        obs_data_set_string(settings.get(), "preset2", "p1");
+        obs_data_set_string(settings.get(), "tune", "ull");
         obs_data_set_string(settings.get(), "multipass", "disabled");
         obs_data_set_string(settings.get(), "multiPass", "disabled");
         obs_data_set_bool(settings.get(), "psycho_aq", false);
@@ -1009,7 +1011,7 @@ ObsDataPtr makeVideoEncoderSettings(const QString &encoderId, int bitrateKbps, i
     } else if (isVideoToolboxEncoder(encoderId)) {
         obs_data_set_bool(settings.get(), "allow_sw", false);
         obs_data_set_bool(settings.get(), "realtime", true);
-        obs_data_set_bool(settings.get(), "use_b_frames", true);
+        obs_data_set_bool(settings.get(), "use_b_frames", false);
         obs_data_set_string(settings.get(), "quality", "balanced");
     } else if (isVaapiEncoder(encoderId)) {
         obs_data_set_bool(settings.get(), "low_power", true);
@@ -1169,23 +1171,70 @@ bool preflightObsGraphicsModule(const ObsRuntime &runtime, const char *moduleNam
 QList<uint32_t> windowsDxgiAdapterIndices()
 {
     using Microsoft::WRL::ComPtr;
-    QList<uint32_t> result;
+    struct AdapterChoice
+    {
+        uint32_t index = 0;
+        quint64 dedicatedVideoMemory = 0;
+        quint64 dedicatedSystemMemory = 0;
+        quint64 sharedSystemMemory = 0;
+        QString name;
+    };
+
+    QList<AdapterChoice> choices;
     ComPtr<IDXGIFactory1> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
-        result.append(0);
-        return result;
+        return QList<uint32_t>{0};
     }
+
     for (UINT adapterIndex = 0;; ++adapterIndex) {
         ComPtr<IDXGIAdapter1> adapter;
         if (factory->EnumAdapters1(adapterIndex, &adapter) == DXGI_ERROR_NOT_FOUND) {
             break;
         }
         DXGI_ADAPTER_DESC1 desc = {};
-        if (SUCCEEDED(adapter->GetDesc1(&desc)) && (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+        if (FAILED(adapter->GetDesc1(&desc)) || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
             continue;
         }
-        result.append(static_cast<uint32_t>(adapterIndex));
+        AdapterChoice choice;
+        choice.index = static_cast<uint32_t>(adapterIndex);
+        choice.dedicatedVideoMemory = static_cast<quint64>(desc.DedicatedVideoMemory);
+        choice.dedicatedSystemMemory = static_cast<quint64>(desc.DedicatedSystemMemory);
+        choice.sharedSystemMemory = static_cast<quint64>(desc.SharedSystemMemory);
+        choice.name = QString::fromWCharArray(desc.Description);
+        choices.append(choice);
     }
+
+    std::sort(choices.begin(), choices.end(), [](const AdapterChoice &a, const AdapterChoice &b) {
+        // OBS game/window capture should render on the high-performance GPU when
+        // Windows exposes both an iGPU and a dGPU. Ranking by dedicated VRAM puts
+        // NVIDIA/AMD/Arc adapters before Intel/UMA adapters while still keeping
+        // every adapter as fallback if the preferred one cannot initialize.
+        if (a.dedicatedVideoMemory != b.dedicatedVideoMemory) {
+            return a.dedicatedVideoMemory > b.dedicatedVideoMemory;
+        }
+        if (a.dedicatedSystemMemory != b.dedicatedSystemMemory) {
+            return a.dedicatedSystemMemory > b.dedicatedSystemMemory;
+        }
+        if (a.sharedSystemMemory != b.sharedSystemMemory) {
+            return a.sharedSystemMemory > b.sharedSystemMemory;
+        }
+        return a.index < b.index;
+    });
+
+    QStringList report;
+    QList<uint32_t> result;
+    for (const AdapterChoice &choice : choices) {
+        result.append(choice.index);
+        report.append(QStringLiteral("#%1 %2 dedicatedVRAM=%3MB shared=%4MB")
+                          .arg(choice.index)
+                          .arg(choice.name.trimmed().isEmpty() ? QStringLiteral("unknown") : choice.name.trimmed())
+                          .arg(choice.dedicatedVideoMemory / (1024 * 1024))
+                          .arg(choice.sharedSystemMemory / (1024 * 1024)));
+    }
+    DebugLog::writeCategory(QStringLiteral("OBS/GPU"),
+                            QStringLiteral("DXGI adapter preference order: %1")
+                                .arg(report.isEmpty() ? QStringLiteral("none") : report.join(QStringLiteral("; "))));
+
     if (result.isEmpty()) {
         result.append(0);
     }
@@ -1390,6 +1439,10 @@ bool addSourceToScene(obs_scene_t *scene, obs_source_t *source, const QSize &can
     bounds.x = static_cast<float>(canvasSize.width());
     bounds.y = static_cast<float>(canvasSize.height());
     obs_sceneitem_set_bounds(item, &bounds);
+    // Preserve the full captured frame inside the user-selected canvas. This is
+    // deliberately SCALE_INNER, not SCALE_OUTER: ultrawide/game captures must
+    // never be cropped just to fill a mismatched player surface. If the source
+    // and canvas ratios differ, showing small bars is safer than cutting UI off.
     obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_SCALE_INNER);
     obs_sceneitem_set_bounds_alignment(item, OBS_ALIGN_CENTER);
     // obs_scene_add() returns the scene-owned item without incrementing its

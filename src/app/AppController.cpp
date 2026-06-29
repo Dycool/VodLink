@@ -200,6 +200,10 @@ AppController::AppController(QObject *parent)
             [this](const QString &broadcastId) {
                 if (m_streamState == StreamState::Stopping
                     && broadcastId == m_broadcastId) {
+                    // The live broadcast and archived video share the same ID.
+                    // Re-apply the VOD-safe status after completing the broadcast
+                    // too, because YouTube can materialize archive defaults late.
+                    m_youtube.ensureVodEmbeddable(broadcastId);
                     resetStreamState();
                 }
             });
