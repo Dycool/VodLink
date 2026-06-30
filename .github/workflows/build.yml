@@ -122,6 +122,11 @@ jobs:
             throw 'Could not find vodlink.exe after build.'
           }
           Copy-Item $exe.FullName (Join-Path $dist 'VodLink.exe') -Force
+          # Ship the app's source commit as part of the installed payload. The
+          # self-contained installer compares this marker before deciding whether
+          # to launch the existing app or replace it with its embedded build.
+          $env:GITHUB_SHA | Set-Content -NoNewline -Encoding ascii `
+            -Path (Join-Path $dist '.vodlink-build-commit')
 
           $encoderHelpers = @('obs-nvenc-test.exe', 'obs-qsv-test.exe', 'obs-amf-test.exe')
           $copiedSidecars = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
