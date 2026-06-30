@@ -40,7 +40,7 @@ var
   ErrorCode: Integer;
 begin
   ExistingApp := ExpandConstant('{localappdata}\VodLink\app\VodLink.exe');
-  if FileExists(ExistingApp) then
+  if FileExists(ExistingApp) and not CmdLineParamExists('/VODLINKUPDATE') then
   begin
     ShellExec('', ExistingApp, '', ExtractFileDir(ExistingApp), SW_SHOWNORMAL,
       ewNoWait, ErrorCode);

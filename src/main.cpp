@@ -6,16 +6,29 @@
 #include <QByteArray>
 #include <QColor>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEasingCurve>
+#include <QFile>
 #include <QIcon>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPalette>
 #include <QPropertyAnimation>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QStyle>
+#include <QTimer>
+#include <QUrl>
 
 #if defined(Q_OS_WIN)
 #ifndef NOMINMAX
@@ -44,6 +57,13 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #endif
 
 namespace {
+#ifndef VODLINK_BUILD_COMMIT
+#define VODLINK_BUILD_COMMIT "dev"
+#endif
+#ifndef VODLINK_RELEASE_TAG
+#define VODLINK_RELEASE_TAG ""
+#endif
+
 #if defined(Q_OS_WIN)
 QByteArray configureQtWebEngineHardwareVideoDecoding()
 {
@@ -156,6 +176,111 @@ bool preferHighPerformanceGpuForFutureLaunches(QString *error)
         return false;
     }
     return true;
+}
+
+void scheduleReleaseUpdateCheck(QApplication *application, AppController *controller,
+                                bool startMinimized)
+{
+    const QString currentTag = QString::fromUtf8(VODLINK_RELEASE_TAG).trimmed();
+    if (currentTag.isEmpty()) {
+        DebugLog::writeCategory(QStringLiteral("updater"),
+                                QStringLiteral("unreleased build %1; public release check disabled")
+                                    .arg(QString::fromUtf8(VODLINK_BUILD_COMMIT)));
+        return;
+    }
+
+    auto *network = new QNetworkAccessManager(application);
+    QTimer::singleShot(5000, network, [network, application, controller, currentTag, startMinimized] {
+        QNetworkRequest request(QUrl(QStringLiteral(
+            "https://api.github.com/repos/Dycool/VodLink/releases/latest")));
+        request.setRawHeader(QByteArrayLiteral("Accept"),
+                             QByteArrayLiteral("application/vnd.github+json"));
+        request.setRawHeader(QByteArrayLiteral("User-Agent"), QByteArrayLiteral("VodLink-Updater"));
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                             QNetworkRequest::NoLessSafeRedirectPolicy);
+        QNetworkReply *metadataReply = network->get(request);
+        QObject::connect(metadataReply, &QNetworkReply::finished, network,
+                         [network, application, controller, currentTag, startMinimized, metadataReply] {
+            const QByteArray metadata = metadataReply->readAll();
+            const auto metadataError = metadataReply->error();
+            metadataReply->deleteLater();
+            if (metadataError != QNetworkReply::NoError) {
+                DebugLog::writeCategory(QStringLiteral("updater"),
+                                        QStringLiteral("latest release check failed"));
+                return;
+            }
+            const QJsonObject release = QJsonDocument::fromJson(metadata).object();
+            const QString latestTag = release.value(QStringLiteral("tag_name")).toString().trimmed();
+            if (latestTag.isEmpty() || latestTag == currentTag) {
+                return;
+            }
+            if (controller->isRecording()) {
+                DebugLog::writeCategory(QStringLiteral("updater"),
+                                        QStringLiteral("update deferred until the next launch because a stream is active"));
+                return;
+            }
+
+            QJsonObject installerAsset;
+            for (const QJsonValue &value : release.value(QStringLiteral("assets")).toArray()) {
+                const QJsonObject asset = value.toObject();
+                if (asset.value(QStringLiteral("name")).toString()
+                    == QStringLiteral("VodLink-Windows-x64.exe")) {
+                    installerAsset = asset;
+                    break;
+                }
+            }
+            const QUrl downloadUrl(installerAsset.value(QStringLiteral("browser_download_url")).toString());
+            const QString digest = installerAsset.value(QStringLiteral("digest")).toString();
+            if (!downloadUrl.isValid() || !digest.startsWith(QStringLiteral("sha256:"))) {
+                DebugLog::writeCategory(QStringLiteral("updater"),
+                                        QStringLiteral("latest release has no verifiable Windows installer"));
+                return;
+            }
+
+            QNetworkRequest downloadRequest(downloadUrl);
+            downloadRequest.setRawHeader(QByteArrayLiteral("User-Agent"), QByteArrayLiteral("VodLink-Updater"));
+            downloadRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                                         QNetworkRequest::NoLessSafeRedirectPolicy);
+            QNetworkReply *downloadReply = network->get(downloadRequest);
+            QObject::connect(downloadReply, &QNetworkReply::finished, network,
+                             [application, controller, latestTag, digest, startMinimized, downloadReply] {
+                const QByteArray installer = downloadReply->readAll();
+                const auto downloadError = downloadReply->error();
+                downloadReply->deleteLater();
+                const QString actualDigest = QStringLiteral("sha256:")
+                    + QString::fromLatin1(QCryptographicHash::hash(installer, QCryptographicHash::Sha256).toHex());
+                if (downloadError != QNetworkReply::NoError
+                    || actualDigest.compare(digest, Qt::CaseInsensitive) != 0) {
+                    DebugLog::writeCategory(QStringLiteral("updater"),
+                                            QStringLiteral("release installer download or digest verification failed"));
+                    return;
+                }
+                QString safeTag = latestTag;
+                safeTag.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")), QStringLiteral("_"));
+                const QString directory = QDir(QStandardPaths::writableLocation(
+                    QStandardPaths::TempLocation)).filePath(QStringLiteral("VodLink-Updater/%1").arg(safeTag));
+                if (!QDir().mkpath(directory)) return;
+                const QString installerPath = QDir(directory).filePath(QStringLiteral("VodLink-Windows-x64.exe"));
+                QFile file(installerPath);
+                if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+                    || file.write(installer) != installer.size()) {
+                    return;
+                }
+                file.close();
+                QStringList updaterArguments{QStringLiteral("--update-background")};
+                if (startMinimized) {
+                    updaterArguments.append(QStringLiteral("--launch-minimized"));
+                }
+                if (QProcess::startDetached(installerPath, updaterArguments)) {
+                    DebugLog::writeCategory(QStringLiteral("updater"),
+                                            QStringLiteral("handing off update from %1 to %2")
+                                                .arg(QString::fromUtf8(VODLINK_RELEASE_TAG), latestTag));
+                    controller->shutdownForQuit();
+                    application->quit();
+                }
+            });
+        });
+    });
 }
 #endif
 } // namespace
@@ -270,6 +395,9 @@ int main(int argc, char *argv[])
 
     DebugLog::write(QStringLiteral("main: startMonitoring"));
     controller.startMonitoring();
+#if defined(Q_OS_WIN)
+    scheduleReleaseUpdateCheck(&application, &controller, startMinimized);
+#endif
     const int exitCode = application.exec();
     DebugLog::write(QStringLiteral("main: QApplication exited with code %1").arg(exitCode));
     DebugLog::shutdown();

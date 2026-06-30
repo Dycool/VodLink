@@ -39,6 +39,8 @@ set(VODLINK_WORKER_URL
 set(VODLINK_GOOGLE_CLIENT_SECRET
     ""
     CACHE STRING "Google OAuth desktop client secret")
+set(VODLINK_BUILD_COMMIT "dev" CACHE STRING "Source commit embedded in the application")
+set(VODLINK_RELEASE_TAG "" CACHE STRING "Release tag, empty for development/Actions builds")
 foreach(_var VODLINK_GOOGLE_CLIENT_ID VODLINK_WORKER_URL VODLINK_GOOGLE_CLIENT_SECRET)
     if(DEFINED ENV{${_var}} AND NOT "$ENV{${_var}}" STREQUAL "")
         set(${_var} "$ENV{${_var}}")
@@ -179,6 +181,10 @@ qt_add_executable(vodlink WIN32
 )
 
 target_include_directories(vodlink PRIVATE src)
+target_compile_definitions(vodlink PRIVATE
+    VODLINK_BUILD_COMMIT="${VODLINK_BUILD_COMMIT}"
+    VODLINK_RELEASE_TAG="${VODLINK_RELEASE_TAG}"
+)
 
 # OBS 32 still exposes obs_add_data_path(), but marks it deprecated. VodLink uses
 # it only as a compatibility bridge for the private bundled runtime data path.

@@ -32,6 +32,7 @@ constexpr int kEmbeddedSetupResource = 2;
 constexpr wchar_t kWindowClass[] = L"VodLinkBootstrapWindow";
 constexpr UINT kInstallFinished = WM_APP + 1;
 constexpr UINT kInstallStatus = WM_APP + 2;
+bool gLaunchMinimized = false;
 
 struct InstallResult {
     bool ok = false;
@@ -60,9 +61,31 @@ std::filesystem::path installedApp()
     return localAppData() / L"VodLink" / L"app" / L"VodLink.exe";
 }
 
-bool launch(const std::filesystem::path &path)
+std::filesystem::path installedCommitMarker()
 {
-    return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
+    return installedApp().parent_path() / L".vodlink-build-commit";
+}
+
+bool installedCommitMatches()
+{
+    std::wifstream input(installedCommitMarker());
+    std::wstring commit;
+    if (!std::getline(input, commit)) {
+        return false;
+    }
+    return commit == kBuildCommit;
+}
+
+bool writeInstalledCommit()
+{
+    std::wofstream output(installedCommitMarker(), std::ios::trunc);
+    output << kBuildCommit;
+    return output.good();
+}
+
+bool launch(const std::filesystem::path &path, const wchar_t *arguments = nullptr)
+{
+    return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", path.c_str(), arguments,
                                                     path.parent_path().c_str(), SW_SHOWNORMAL)) > 32;
 }
 
@@ -160,7 +183,7 @@ bool verifyDownload(const std::filesystem::path &setup)
 bool runSetup(const std::filesystem::path &setup)
 {
     std::wstring command = L"\"" + setup.wstring()
-        + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-";
+        + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /FORCECLOSEAPPLICATIONS /VODLINKUPDATE";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
@@ -185,21 +208,21 @@ InstallResult install(HWND window)
     const auto setup = cache / L"VodLink-Windows-x64-Setup.exe";
     std::wstring error;
     bool ok = extractEmbeddedSetup(setup, &error);
-    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Verifying installer"));
+    if (ok && window) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Verifying installer"));
     if (ok && !verifyDownload(setup)) {
         error = L"The embedded installer does not match the VodLink build commit encoded in this launcher.";
         ok = false;
     }
-    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Installing VodLink"));
+    if (ok && window) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Installing VodLink"));
     if (ok && !runSetup(setup)) {
         error = L"VodLink could not be installed.";
         ok = false;
     }
-    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Opening VodLink"));
-    if (ok && !launch(installedApp())) {
-        error = L"VodLink was installed, but could not be opened.";
+    if (ok && !writeInstalledCommit()) {
+        error = L"VodLink was installed, but its build marker could not be written.";
         ok = false;
     }
+    if (ok && window) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Opening VodLink"));
 
     std::error_code ignored;
     std::filesystem::remove(setup, ignored);
@@ -209,6 +232,11 @@ InstallResult install(HWND window)
 DWORD WINAPI installWorker(void *context)
 {
     auto *result = new InstallResult(install(static_cast<HWND>(context)));
+    if (result->ok
+        && !launch(installedApp(), gLaunchMinimized ? L"--minimized" : nullptr)) {
+        result->ok = false;
+        result->error = L"VodLink was installed, but could not be opened.";
+    }
     PostMessageW(static_cast<HWND>(context), kInstallFinished, 0,
                  reinterpret_cast<LPARAM>(result));
     return 0;
@@ -332,8 +360,12 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 }
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
 {
+    const std::wstring arguments(commandLine ? commandLine : L"");
+    const bool backgroundUpdate = arguments.find(L"--update-background") != std::wstring::npos;
+    const bool launchMinimized = arguments.find(L"--launch-minimized") != std::wstring::npos;
+    gLaunchMinimized = launchMinimized;
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\VodLinkInstaller");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
         if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
@@ -344,11 +376,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
         return 0;
     }
     const auto app = installedApp();
-    if (std::filesystem::is_regular_file(app)) {
-        const int result = launch(app) ? 0 : 1;
+    if (std::filesystem::is_regular_file(app) && installedCommitMatches()) {
+        const int result = launch(app, launchMinimized ? L"--minimized" : nullptr) ? 0 : 1;
         ReleaseMutex(mutex);
         CloseHandle(mutex);
         return result;
+    }
+
+    if (backgroundUpdate) {
+        const InstallResult installResult = install(nullptr);
+        const bool launched = installResult.ok
+            && launch(installedApp(), launchMinimized ? L"--minimized" : nullptr);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return launched ? 0 : 1;
     }
 
     WNDCLASSEXW windowClass{sizeof(windowClass)};

@@ -85,6 +85,8 @@ jobs:
             $workerUrl = "https://example.invalid"
           }
 
+          $releaseTag = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME } else { '' }
+
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/stage" `
@@ -96,7 +98,9 @@ jobs:
             -DCMAKE_PREFIX_PATH="$env:LIBOBS_ROOT;$env:QT_ROOT_DIR" `
             -DVODLINK_GOOGLE_CLIENT_ID="$clientId" `
             -DVODLINK_GOOGLE_CLIENT_SECRET="$clientSecret" `
-            -DVODLINK_WORKER_URL="$workerUrl"
+            -DVODLINK_WORKER_URL="$workerUrl" `
+            -DVODLINK_BUILD_COMMIT="$env:GITHUB_SHA" `
+            -DVODLINK_RELEASE_TAG="$releaseTag"
 
       - name: Build
         shell: pwsh
@@ -216,7 +220,21 @@ jobs:
             /Fe:"$output\VodLink-Windows-x64.exe" /link /SUBSYSTEM:WINDOWS `
             bcrypt.lib shell32.lib ole32.lib user32.lib
           if ($LASTEXITCODE -ne 0) { throw 'Could not compile the VodLink launcher.' }
-          Remove-Item "$output\VodLinkBootstrapBuild.h", "$output\VodLinkBootstrap.res", $bootstrapRc -Force
+
+          # The launcher now contains the verified setup as an RCDATA resource.
+          # Keep only that self-contained EXE in the published Actions artifact.
+          Remove-Item `
+            "$output\VodLinkBootstrapBuild.h", `
+            "$output\VodLinkBootstrap.res", `
+            $bootstrapRc, `
+            $setup, `
+            "$setup.sha256" `
+            -Force
+
+          $publishedFiles = @(Get-ChildItem -Path $output -File)
+          if ($publishedFiles.Count -ne 1 -or $publishedFiles[0].Name -ne 'VodLink-Windows-x64.exe') {
+            throw "Windows artifact must contain only VodLink-Windows-x64.exe; found: $($publishedFiles.Name -join ', ')"
+          }
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
