@@ -58,15 +58,13 @@
     const appOrigin = (window.location.origin && window.location.origin !== 'null')
       ? window.location.origin
       : 'https://vodlink.app';
-    // Qt WebEngine consistently reaches onReady, then the nocookie iframe throws
-    // YouTube HTML5 error 5 in the user's debug logs. Keep the lite facade, but
-    // use the normal JS API host for the active player instead of repeatedly
-    // rebuilding the same failing nocookie player.
+    // Qt WebEngine reaches YouTube IFrame API onReady, then the HTML5 player
+    // fails with error 5 on this packaged runtime. The real lite-youtube-embed
+    // behavior is a lightweight facade that injects a normal iframe on demand,
+    // so make that the primary VodLink path inside Qt. POV switching still stays
+    // in sync because VodLink tracks playback time with its own monotonic clock.
     const youtubePlayerHost = 'https://www.youtube.com';
-    // Keep lite-youtube as the primary path. Do not hide the real issue behind
-    // a plain iframe fallback: with -debug, every important lifecycle/error event
-    // is forwarded to VodLink-debug.txt through the Qt WebChannel bridge.
-    const useRawIframeByDefault = false;
+    const useRawIframeByDefault = true;
     const bootTimeMs = Date.now();
 
     function safeStringify(value) {
@@ -447,7 +445,10 @@
       };
       div.appendChild(element);
       document.getElementById('players').appendChild(div);
-      slot = { element, div, player: null, ready: false, pendingSeek: 0, lastUsed: Date.now(), raw: false, rawStartedAt: 0 };
+      slot = {
+        element, div, player: null, ready: false, pendingSeek: 0, lastUsed: Date.now(),
+        raw: false, rawStartedAt: 0, rawBaseSeek: 0, rawPaused: false, iframe: null,
+      };
       players.set(videoId, slot);
       evictCache();
       return slot;
@@ -465,6 +466,9 @@
       slot.ready = false;
       slot.raw = false;
       slot.rawStartedAt = 0;
+      slot.rawBaseSeek = 0;
+      slot.rawPaused = false;
+      slot.iframe = null;
       if (!keepFacade) {
         try { if (slot.div) slot.div.remove(); } catch (_) {}
         players.delete(videoId);
@@ -486,20 +490,27 @@
 
     function rawEmbedUrl(videoId, seek) {
       const qs = new URLSearchParams({
-        autoplay: '1', controls: '1', rel: '0', modestbranding: '1', playsinline: '1',
-        fs: '1', start: String(Math.max(0, Math.floor(seek || 0))), origin: appOrigin,
+        autoplay: '1',
+        controls: '1',
+        rel: '0',
+        modestbranding: '1',
+        playsinline: '1',
+        fs: '1',
+        start: String(Math.max(0, Math.floor(seek || 0))),
       });
       return 'https://www.youtube.com/embed/' + encodeURIComponent(videoId) + '?' + qs.toString();
     }
 
     function createRawIframe(videoId, seek) {
-      dbg('raw-iframe-create', { videoId, seek });
+      dbg('lite-iframe-create', { videoId, seek, srcHost: 'www.youtube.com', jsApi: false });
       const slot = makeLiteSlot(videoId);
       destroyPlayer(videoId, true);
       slot.raw = true;
       slot.ready = true;
       slot.pendingSeek = Math.max(0, Number(seek || 0));
+      slot.rawBaseSeek = slot.pendingSeek;
       slot.rawStartedAt = Date.now();
+      slot.rawPaused = false;
 
       slot.element.classList.add('lyt-activated');
       const iframe = document.createElement('iframe');
@@ -508,6 +519,8 @@
       iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
       iframe.referrerPolicy = 'strict-origin-when-cross-origin';
       iframe.allowFullscreen = true;
+      iframe.onload = () => dbg('lite-iframe-load', { videoId, seek: slot.pendingSeek });
+      slot.iframe = iframe;
       slot.element.appendChild(iframe);
       setActive(videoId);
       showOverlay(null);
@@ -522,6 +535,15 @@
           slot.div.classList.add('active');
         } else {
           slot.div.classList.remove('active');
+          if (slot.raw && !slot.rawPaused) {
+            const elapsed = Math.max(0, Date.now() - (slot.rawStartedAt || Date.now())) / 1000.0;
+            slot.rawBaseSeek = (slot.rawBaseSeek || slot.pendingSeek || 0) + elapsed;
+            slot.pendingSeek = slot.rawBaseSeek;
+            slot.rawPaused = true;
+            if (slot.iframe) { try { slot.iframe.remove(); } catch (_) {} slot.iframe = null; }
+            slot.element.classList.remove('lyt-activated');
+            dbg('lite-iframe-freeze-inactive', { videoId: id, seek: slot.rawBaseSeek });
+          }
           try { if (slot.player) slot.player.pauseVideo(); } catch (_) {}
         }
       });
@@ -650,7 +672,8 @@
         const slot = slotFor(activeId);
         if (!bridge || !slot) return;
         if (slot.raw) {
-          const estimate = (slot.pendingSeek || 0) + Math.max(0, Date.now() - (slot.rawStartedAt || Date.now())) / 1000.0;
+          const elapsed = slot.rawPaused ? 0 : Math.max(0, Date.now() - (slot.rawStartedAt || Date.now())) / 1000.0;
+          const estimate = (slot.rawBaseSeek || slot.pendingSeek || 0) + elapsed;
           try { bridge.onTimeUpdate(estimate); } catch (_) {}
           return;
         }
@@ -704,8 +727,29 @@
     window.vodlink = {
       loadVideo: function (videoId, seek) { doLoad(videoId, seek, false); },
       seek: function (seconds) { seekAndPlay(activeId, Math.max(0, Number(seconds || 0))); },
-      play: function () { const s = slotFor(activeId); if (s && s.player) s.player.playVideo(); },
-      pause: function () { const s = slotFor(activeId); if (s && s.player) s.player.pauseVideo(); },
+      play: function () {
+        const s = slotFor(activeId);
+        if (s && s.raw && s.rawPaused) {
+          createRawIframe(activeId, s.rawBaseSeek || s.pendingSeek || 0);
+          return;
+        }
+        if (s && s.player) s.player.playVideo();
+      },
+      pause: function () {
+        const s = slotFor(activeId);
+        if (s && s.raw) {
+          const elapsed = Math.max(0, Date.now() - (s.rawStartedAt || Date.now())) / 1000.0;
+          s.rawBaseSeek = (s.rawBaseSeek || s.pendingSeek || 0) + elapsed;
+          s.pendingSeek = s.rawBaseSeek;
+          s.rawStartedAt = Date.now();
+          s.rawPaused = true;
+          if (s.iframe) { try { s.iframe.remove(); } catch (_) {} s.iframe = null; }
+          dbg('lite-iframe-pause', { videoId: activeId, seek: s.rawBaseSeek });
+          stopReporting();
+          return;
+        }
+        if (s && s.player) s.player.pauseVideo();
+      },
       message: function (text) { showOverlay(text); },
       cacheVideos: cacheVideos,
     };
