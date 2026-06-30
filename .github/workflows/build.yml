@@ -196,9 +196,10 @@ jobs:
           # The public installer contains this exact setup payload. It never
           # follows latest releases or falls back to a different commit.
           $bootstrapRc = Join-Path $output 'VodLinkBootstrap.generated.rc'
+          $setupRcPath = $setup.Replace('\', '/')
           @(
             (Get-Content 'installer\windows\VodLinkBootstrap.rc' -Raw)
-            "2 RCDATA `"$setup`""
+            "2 RCDATA `"$setupRcPath`""
           ) | Set-Content -Encoding ascii $bootstrapRc
           rc.exe /nologo /i resources /fo "$output\VodLinkBootstrap.res" $bootstrapRc
           if ($LASTEXITCODE -ne 0) { throw 'Could not compile the installer icon.' }
