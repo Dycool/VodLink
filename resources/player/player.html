@@ -724,6 +724,52 @@
       pendingCache = unique;
     }
 
+    async function logMediaCodecCapabilities() {
+      const video = document.createElement('video');
+      const codecs = [
+        { name: 'avc1-main', contentType: 'video/mp4; codecs="avc1.4d401f"' },
+        { name: 'avc1-high', contentType: 'video/mp4; codecs="avc1.640028"' },
+        { name: 'vp9-8bit', contentType: 'video/webm; codecs="vp09.00.41.08"' },
+        { name: 'vp9-10bit', contentType: 'video/webm; codecs="vp09.02.41.10"' },
+        { name: 'av1-8bit', contentType: 'video/mp4; codecs="av01.0.08M.08"' },
+        { name: 'av1-10bit', contentType: 'video/mp4; codecs="av01.0.08M.10"' },
+      ];
+      dbg('codec-can-play-type', {
+        video: Object.fromEntries(codecs.map(codec => [codec.name, video.canPlayType(codec.contentType)])),
+        audio: {
+          aac: video.canPlayType('audio/mp4; codecs="mp4a.40.2"'),
+          opus: video.canPlayType('audio/webm; codecs="opus"'),
+        },
+        mediaSource: typeof MediaSource !== 'undefined',
+        mediaCapabilities: !!(navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo),
+        userAgent: navigator.userAgent,
+      });
+
+      if (!navigator.mediaCapabilities || !navigator.mediaCapabilities.decodingInfo) return;
+      for (const codec of codecs) {
+        try {
+          const result = await navigator.mediaCapabilities.decodingInfo({
+            type: 'media-source',
+            video: {
+              contentType: codec.contentType,
+              width: 2560,
+              height: 1440,
+              bitrate: 16000000,
+              framerate: 60,
+            },
+          });
+          dbg('codec-decoding-info', {
+            codec: codec.name,
+            supported: result.supported,
+            smooth: result.smooth,
+            powerEfficient: result.powerEfficient,
+          });
+        } catch (error) {
+          dbg('codec-decoding-info-error', { codec: codec.name, error });
+        }
+      }
+    }
+
     window.vodlink = {
       loadVideo: function (videoId, seek) { doLoad(videoId, seek, false); },
       seek: function (seconds) { seekAndPlay(activeId, Math.max(0, Number(seconds || 0))); },
@@ -758,6 +804,7 @@
     new QWebChannel(qt.webChannelTransport, function (channel) {
       bridge = channel.objects.bridge;
       dbg('qwebchannel-ready', { hasBridge: !!bridge, pendingCache, pendingLoad });
+      logMediaCodecCapabilities();
       if (bridge.loadRequested) bridge.loadRequested.connect(window.vodlink.loadVideo);
       if (bridge.seekRequested) bridge.seekRequested.connect(window.vodlink.seek);
       if (bridge.playRequested) bridge.playRequested.connect(window.vodlink.play);

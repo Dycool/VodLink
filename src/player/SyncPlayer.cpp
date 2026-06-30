@@ -98,7 +98,10 @@ SyncPlayer::SyncPlayer(QWidget *parent)
     m_profile->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);
     m_profile->setHttpCacheMaximumSize(256 * 1024 * 1024);
     m_profile->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
-    m_profile->setHttpUserAgent(QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 VodLink/1.0"));
+    // Keep Qt WebEngine's real Chromium version and capability identity. A
+    // hard-coded Chrome version can make YouTube select an incompatible player
+    // response before it ever requests the media stream.
+    const QString webEngineUserAgent = m_profile->httpUserAgent();
     const QString cacheRoot = AppPaths::cacheRoot();
     if (!cacheRoot.isEmpty()) {
         const QString playerCache = QDir(cacheRoot).filePath(QStringLiteral("webengine-player"));
@@ -109,8 +112,8 @@ SyncPlayer::SyncPlayer(QWidget *parent)
     auto *page = new PlayerPage(m_profile, m_view);
     m_view->setPage(page);
     DebugLog::writeCategory(QStringLiteral("LiteYouTube"),
-                            QStringLiteral("QWebEngine profile created origin=%1 cacheRoot=%2")
-                                .arg(QString::fromLatin1(kPlayerOrigin), cacheRoot));
+                            QStringLiteral("QWebEngine profile created origin=%1 cacheRoot=%2 userAgent=%3")
+                                .arg(QString::fromLatin1(kPlayerOrigin), cacheRoot, webEngineUserAgent));
     connect(page, &QWebEnginePage::loadStarted, this, [] {
         DebugLog::writeCategory(QStringLiteral("LiteYouTube"), QStringLiteral("player page load started"));
     });
@@ -129,6 +132,8 @@ SyncPlayer::SyncPlayer(QWidget *parent)
     m_view->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
     m_view->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
     m_view->settings()->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, true);
+    m_view->settings()->setAttribute(QWebEngineSettings::WebGLEnabled, true);
+    m_view->settings()->setAttribute(QWebEngineSettings::Accelerated2dCanvasEnabled, true);
 
     m_channel->registerObject(QStringLiteral("bridge"), m_bridge);
     m_view->page()->setWebChannel(m_channel);

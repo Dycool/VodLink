@@ -58,6 +58,7 @@ private:
     bool createEncoders(QString *error);
     bool createOutput(const QUrl &ingestUrl, QString *error);
     bool startOutput(QString *error);
+    void ensureCaptureSourceReady();
     void cleanupObs();
     void releaseObsObjects();
 
@@ -92,6 +93,15 @@ private:
     QTimer m_focusGateTimer;
     bool m_focusGateEnabled = false;
     bool m_focusGateBlack = false;
+    QStringList m_captureFallbackCandidates;
+    QString m_captureWindowSpec;
+    QString m_captureMonitorId;
+    int m_captureFallbackIndex = -1;
+    int m_captureEmptyFrameChecks = 0;
+    quint64 m_renderFramesBaseline = 0;
+    quint64 m_renderLagBaseline = 0;
+    quint32 m_encodedFramesBaseline = 0;
+    quint32 m_encoderSkippedBaseline = 0;
 };
 
 using CaptureMode = RtmpStreamer::CaptureMode;

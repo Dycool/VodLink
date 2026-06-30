@@ -22,8 +22,9 @@
 
 > **Pre-compiled Binaries Available!**
 > Download VodLink for Windows, macOS, and Linux from the **[Releases](https://github.com/Dycool/VodLink/releases)** page.
->
-> The project website is published from the **[`docs/`](docs/)** folder and can be hosted directly with GitHub Pages.
+> On Windows, download `VodLink-Windows-x64.exe`. It opens VodLink when already
+> installed; otherwise it silently downloads the verified full installer,
+> installs to `%LOCALAPPDATA%\VodLink\app`, and adds VodLink to the Start menu.
 
 ---
 
@@ -112,4 +113,3 @@ Found a bug or have a feature request? Open an issue at **[github.com/Dycool/Vod
 ## 📄 License
 
 See the repository license for details.
-

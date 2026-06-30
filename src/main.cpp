@@ -41,6 +41,32 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #endif
 
 namespace {
+#if defined(Q_OS_WIN)
+QByteArray configureQtWebEngineHardwareVideoDecoding()
+{
+    QByteArray flags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS").trimmed();
+
+    // Hardware video decoding is Chromium's default on Windows. Remove the
+    // opt-out if it was inherited from the user's environment, and allow the
+    // D3D11 decoder on GPUs that Chromium's conservative blocklist rejects.
+    flags.replace("--disable-accelerated-video-decode", "");
+    for (const QByteArray &required : {
+             QByteArrayLiteral("--ignore-gpu-blocklist"),
+             QByteArrayLiteral("--enable-gpu-rasterization"),
+             QByteArrayLiteral("--enable-zero-copy")}) {
+        if (!flags.contains(required)) {
+            if (!flags.isEmpty() && !flags.endsWith(' ')) {
+                flags.append(' ');
+            }
+            flags.append(required);
+        }
+    }
+    flags = flags.simplified();
+    qputenv("QTWEBENGINE_CHROMIUM_FLAGS", flags);
+    return flags;
+}
+#endif
+
 // A dark palette so widgets that fall back to default platform colors (QDialog,
 // QMessageBox, QScrollArea viewports, combo-box popups, …) render dark instead of
 // the platform white. The per-widget stylesheet still styles the chrome on top.
@@ -133,6 +159,11 @@ bool preferHighPerformanceGpuForFutureLaunches(QString *error)
 
 int main(int argc, char *argv[])
 {
+#if defined(Q_OS_WIN)
+    // Qt WebEngine reads Chromium flags while QApplication is being created.
+    // Setting them afterwards is too late to affect its GPU/media processes.
+    const QByteArray webEngineFlags = configureQtWebEngineHardwareVideoDecoding();
+#endif
     QApplication application(argc, argv);
     // Keep QStandardPaths app-specific folders from becoming VodLink/VodLink.
     // VodLink stores its own data via AppPaths in a single local root:
@@ -149,6 +180,9 @@ int main(int argc, char *argv[])
     }
     DebugLog::write(QStringLiteral("main: QApplication created"));
 #if defined(Q_OS_WIN)
+    DebugLog::writeCategory(QStringLiteral("GPU"),
+                            QStringLiteral("Qt WebEngine Chromium flags=%1")
+                                .arg(QString::fromUtf8(webEngineFlags)));
     QString gpuPreferenceError;
     if (preferHighPerformanceGpuForFutureLaunches(&gpuPreferenceError)) {
         DebugLog::writeCategory(QStringLiteral("GPU"),

@@ -110,14 +110,31 @@ QString cacheRoot()
 QStringList resetTargets()
 {
     QStringList paths;
+#if defined(Q_OS_WIN)
+    // The per-user installer lives in %LOCALAPPDATA%/VodLink/app. Reset app
+    // data without deleting the installed program or its Start menu target.
+    const QDir root(dataRoot());
+    for (const QString &name : {
+             QStringLiteral("cache"),
+             QStringLiteral("obs-runtime"),
+             QStringLiteral("obs-private"),
+             QStringLiteral("vodlink.db"),
+             QStringLiteral("vodlink.db-wal"),
+             QStringLiteral("vodlink.db-shm")}) {
+        addUniqueVodLinkPath(&paths, root.filePath(name));
+    }
+#else
     addUniqueVodLinkPath(&paths, dataRoot());
     addUniqueVodLinkPath(&paths, cacheRoot());
+#endif
     addUniqueVodLinkPath(&paths, legacyDoubleDataRoot());
     addUniqueVodLinkPath(&paths, legacyDoubleCacheRoot());
 
     // Include Qt's current app-specific paths too, but only if they are clearly
     // VodLink-owned. This catches older builds that used organization/app naming.
+#if !defined(Q_OS_WIN)
     addUniqueVodLinkPath(&paths, QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
+#endif
     addUniqueVodLinkPath(&paths, QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
 
     // Delete deeper/nested paths first, then the parent. This avoids harmless
