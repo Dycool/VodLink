@@ -25,6 +25,7 @@
 #define WIN32_LEAN_AND_MEAN 1
 #endif
 #include <windows.h>
+#include <ShObjIdl_core.h>
 #include <shellapi.h>
 #pragma comment(lib, "shell32.lib")
 #endif
