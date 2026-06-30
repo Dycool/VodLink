@@ -102,7 +102,7 @@ QString captureModeName(RtmpStreamer::CaptureMode mode)
 {
     return mode == RtmpStreamer::CaptureMode::FullDesktop
                ? QStringLiteral("Desktop")
-               : QStringLiteral("GameCapture");
+               : QStringLiteral("GameWindow");
 }
 
 QString audioSourceName(RtmpStreamer::AudioCaptureSource source)
@@ -295,12 +295,17 @@ QStringList videoSourceCandidates(RtmpStreamer::CaptureMode mode)
 {
 #if defined(Q_OS_WIN)
     if (mode == RtmpStreamer::CaptureMode::GameWindow) {
-        // Directly sharing the game's render surface avoids the full-resolution
-        // Desktop Duplication copy that competes with a busy game for GPU time.
-        // Windows Graphics Capture is the compatibility fallback, with desktop
-        // capture retained last for anti-cheat titles that block both methods.
-        return {QStringLiteral("game_capture"),
-                QStringLiteral("window_capture"),
+        // Windows Graphics Capture avoids copying the entire monitor and does
+        // not inject a graphics hook into anti-cheat games. OBS Game Capture is
+        // kept as an explicit experiment because some titles expose a correctly
+        // sized but permanently black hooked surface; dimensions alone cannot
+        // reliably detect that failure.
+        if (envFlagEnabled("VODLINK_EXPERIMENTAL_GAME_CAPTURE")) {
+            return {QStringLiteral("game_capture"),
+                    QStringLiteral("window_capture"),
+                    QStringLiteral("monitor_capture")};
+        }
+        return {QStringLiteral("window_capture"),
                 QStringLiteral("monitor_capture")};
     }
     return {QStringLiteral("monitor_capture")};
