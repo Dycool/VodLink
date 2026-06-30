@@ -89,14 +89,6 @@ cmake --build build --config Release --parallel
 
 ---
 
-## 📚 Documentation
-
-The `docs/` folder contains the GitHub Pages website.
-
-* **[Website](docs/index.html)** — Static landing page for GitHub Pages.
-
----
-
 ## 🔗 References
 
 | Component | Source |
