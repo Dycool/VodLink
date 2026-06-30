@@ -193,24 +193,18 @@ jobs:
           }
           $setupHash | Set-Content -Encoding ascii "$setup.sha256"
 
-          rc.exe /nologo /i resources /fo "$output\VodLinkBootstrap.res" 'installer\windows\VodLinkBootstrap.rc'
+          # The public installer contains this exact setup payload. It never
+          # follows latest releases or falls back to a different commit.
+          $bootstrapRc = Join-Path $output 'VodLinkBootstrap.generated.rc'
+          @(
+            (Get-Content 'installer\windows\VodLinkBootstrap.rc' -Raw)
+            "2 RCDATA `"$setup`""
+          ) | Set-Content -Encoding ascii $bootstrapRc
+          rc.exe /nologo /i resources /fo "$output\VodLinkBootstrap.res" $bootstrapRc
           if ($LASTEXITCODE -ne 0) { throw 'Could not compile the installer icon.' }
 
-          # A bootstrapper must never follow releases/latest: otherwise an old
-          # launcher can silently install a different build. Tagged builds pin
-          # the exact release tag; ordinary CI builds use a deliberately
-          # unpublished identifier so they fail safely instead of drifting.
-          $releaseTag = if ($env:GITHUB_REF -like 'refs/tags/v*') {
-            $env:GITHUB_REF_NAME
-          } else {
-            "unpublished-$env:GITHUB_SHA"
-          }
-          if ($releaseTag -notmatch '^[A-Za-z0-9._-]+$') {
-            throw "Unsafe release tag for the Windows bootstrapper: '$releaseTag'"
-          }
           @(
             '#pragma once'
-            "#define VODLINK_RELEASE_TAG L`"$releaseTag`""
             "#define VODLINK_BUILD_COMMIT L`"$env:GITHUB_SHA`""
             "#define VODLINK_SETUP_SHA256 `"$setupHash`""
           ) | Set-Content -Encoding ascii "$output\VodLinkBootstrapBuild.h"
@@ -219,9 +213,9 @@ jobs:
             "/I$output" `
             'installer\windows\VodLinkBootstrap.cpp' "$output\VodLinkBootstrap.res" `
             /Fe:"$output\VodLink-Windows-x64.exe" /link /SUBSYSTEM:WINDOWS `
-            winhttp.lib bcrypt.lib shell32.lib ole32.lib user32.lib
+            bcrypt.lib shell32.lib ole32.lib user32.lib
           if ($LASTEXITCODE -ne 0) { throw 'Could not compile the VodLink launcher.' }
-          Remove-Item "$output\VodLinkBootstrapBuild.h", "$output\VodLinkBootstrap.res" -Force
+          Remove-Item "$output\VodLinkBootstrapBuild.h", "$output\VodLinkBootstrap.res", $bootstrapRc -Force
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -230,13 +224,6 @@ jobs:
           path: installer-output/*
           if-no-files-found: error
           retention-days: 14
-
-      - name: Publish tagged Windows release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: installer-output/*
 
   macos:
     name: macOS

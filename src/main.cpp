@@ -25,6 +25,8 @@
 #define WIN32_LEAN_AND_MEAN 1
 #endif
 #include <windows.h>
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
 #endif
 #include <QStyleFactory>
 
@@ -170,6 +172,10 @@ int main(int argc, char *argv[])
     // %LOCALAPPDATA%/VodLink on Windows.
     QCoreApplication::setOrganizationName(QString());
     QCoreApplication::setApplicationName(QStringLiteral("VodLink"));
+    QGuiApplication::setApplicationDisplayName(QStringLiteral("VodLink"));
+#if defined(Q_OS_WIN)
+    SetCurrentProcessExplicitAppUserModelID(L"VodLink.VodLink");
+#endif
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/vodlink.png")));
 
     const QStringList arguments = QCoreApplication::arguments();

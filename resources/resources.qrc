@@ -2,6 +2,7 @@
 <RCC version="1.0">
   <qresource prefix="/">
     <file>vodlink.png</file>
+    <file>vodlink.ico</file>
     <file>vodlink.svg</file>
     <file>check.svg</file>
     <file>chevron-down.svg</file>

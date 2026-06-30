@@ -107,7 +107,7 @@ private:
     QWidget *m_mainPage = nullptr;
 
     QLabel *m_statusLabel = nullptr;
-    QLabel *m_autoRecordLabel = nullptr;
+    QPushButton *m_autoRecordLabel = nullptr;
     bool m_isStreaming = false;
     QString m_lastStatusMessage;
     QToolButton *m_accountButton = nullptr;

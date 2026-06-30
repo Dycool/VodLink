@@ -83,17 +83,17 @@ jobs:
 
           mkdir -p release
 
-          WINDOWS_EXE="$(find downloaded -type f -iname 'VodLink.exe' | head -n 1 || true)"
-          MAC_APP_DIR="$(find downloaded -type d -name 'VodLink.app' | head -n 1 || true)"
+          WINDOWS_INSTALLER="$(find downloaded -type f -name 'VodLink-Windows-x64.exe' | head -n 1 || true)"
+          MAC_APP_ZIP="$(find downloaded -type f -name 'VodLink.app.zip' | head -n 1 || true)"
           LINUX_APPIMAGE="$(find downloaded -type f -iname 'VodLink.AppImage' | head -n 1 || true)"
 
-          if [[ -z "$WINDOWS_EXE" ]]; then
-            echo "Could not find VodLink.exe in downloaded artifacts."
+          if [[ -z "$WINDOWS_INSTALLER" ]]; then
+            echo "Could not find the self-contained Windows installer in downloaded artifacts."
             exit 1
           fi
 
-          if [[ -z "$MAC_APP_DIR" ]]; then
-            echo "Could not find VodLink.app in downloaded artifacts."
+          if [[ -z "$MAC_APP_ZIP" ]]; then
+            echo "Could not find VodLink.app.zip in downloaded artifacts."
             exit 1
           fi
 
@@ -102,12 +102,11 @@ jobs:
             exit 1
           fi
 
-          cp "$WINDOWS_EXE" release/VodLink.exe
+          cp "$WINDOWS_INSTALLER" release/VodLink-Windows-x64.exe
+          cp "$MAC_APP_ZIP" release/VodLink.app.zip
           cp "$LINUX_APPIMAGE" release/VodLink.AppImage
           chmod +x release/VodLink.AppImage
           test "$(stat -c%s release/VodLink.AppImage)" -gt 100000000
-
-          ditto -c -k --keepParent "$MAC_APP_DIR" release/VodLink.app.zip
 
           echo "Release files:"
           ls -lh release
@@ -121,9 +120,10 @@ jobs:
           set -euo pipefail
 
           gh release create "$TAG" \
-            release/VodLink.exe \
+            release/VodLink-Windows-x64.exe \
             release/VodLink.app.zip \
             release/VodLink.AppImage \
             --title "VodLink $TAG" \
             --notes "VodLink release $TAG" \
+            --latest \
             --verify-tag

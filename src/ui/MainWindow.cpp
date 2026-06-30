@@ -85,6 +85,7 @@ constexpr auto kResolutionSetting = "recorder_resolution";
 constexpr auto kFpsSetting = "recorder_fps";
 constexpr auto kNotificationsSetting = "notifications";
 constexpr auto kLaunchAtStartupSetting = "launch_at_startup";
+constexpr auto kTrayCloseTipShownSetting = "tray_close_tip_shown";
 constexpr auto kPrivacyGameOnly = "game_only";
 constexpr auto kPrivacyGameExternalAudio = "game_external_audio";
 constexpr auto kPrivacyDesktop = "desktop";
@@ -818,6 +819,18 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
     setupTray();
     qApp->installEventFilter(this);
 
+    // Launching minimized is the default for a fresh install. A saved opt-out
+    // remains authoritative on later launches.
+    if (m_controller->appSetting(QString::fromLatin1(kLaunchAtStartupSetting),
+                                 QStringLiteral("1")) == QStringLiteral("1")
+        && !launchAtStartupEnabled()) {
+        QString startupError;
+        if (setLaunchAtStartupEnabled(true, &startupError)) {
+            m_controller->setAppSetting(QString::fromLatin1(kLaunchAtStartupSetting),
+                                        QStringLiteral("1"));
+        }
+    }
+
     connect(m_controller, &AppController::libraryChanged, this, [this] {
         reloadLibrary();
     });
@@ -904,6 +917,10 @@ void MainWindow::buildUi()
         QPushButton#GhostButton, QToolButton#GhostButton { background: rgba(11, 16, 26, 0.75); border: 1px solid rgba(128, 141, 169, 0.22); font-weight: 600; }
         QPushButton#GhostButton:hover, QToolButton#GhostButton:hover { background: rgba(124, 77, 255, 0.18); border: 1px solid rgba(143, 102, 255, 0.7); }
         QPushButton#DangerButton { background: rgba(255, 68, 90, 0.16); color: #ff6b7d; border: 1px solid rgba(255, 68, 90, 0.32); }
+        QPushButton#StopStreamButton { background: #d9364f; color: #ffffff; border: 1px solid #ef6478; }
+        QPushButton#StopStreamButton:hover { background: #ea405a; }
+        QPushButton#StopStreamButton:pressed { background: #b7273e; }
+        QPushButton#StopStreamButton:disabled { background: rgba(52, 58, 73, 0.72); color: #747d91; border: 1px solid rgba(128, 141, 169, 0.16); }
         QPushButton#VodCard { text-align: left; background: rgba(13, 19, 30, 0.96); border: 1px solid rgba(128, 141, 169, 0.18); border-radius: 18px; padding: 0px; }
         QPushButton#VodCard:hover { border: 1px solid rgba(138, 92, 255, 0.78); background: rgba(18, 24, 38, 0.98); }
         QPushButton#VodCard[selected="true"] { border: 2px solid #7c4dff; background: rgba(28, 22, 52, 0.92); }
@@ -954,10 +971,15 @@ void MainWindow::buildUi()
     bottom->setContentsMargins(18, 8, 18, 2);
     m_statusLabel = mutedLabel(QStringLiteral("Watching for games"));
     bottom->addWidget(m_statusLabel, 1);
-    m_autoRecordLabel = new QLabel;
-    m_autoRecordLabel->setStyleSheet(QStringLiteral("color:#8e98ad;"));
-    m_autoRecordLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_autoRecordLabel = new QPushButton;
+    m_autoRecordLabel->setFlat(true);
+    m_autoRecordLabel->setCursor(Qt::PointingHandCursor);
     bottom->addWidget(m_autoRecordLabel, 0, Qt::AlignRight);
+    connect(m_autoRecordLabel, &QPushButton::clicked, this, [this] {
+        if (!m_controller->isRecording()) {
+            m_controller->setAutoRecordEnabled(!m_controller->autoRecordEnabled());
+        }
+    });
     updateAutoRecordLabel();
     shellLayout->addLayout(bottom);
 
@@ -1420,18 +1442,28 @@ void MainWindow::updateAutoRecordLabel()
         return;
     }
     if (m_controller->isRecording()) {
-        m_autoRecordLabel->setToolTip(QString());
+        m_autoRecordLabel->setEnabled(false);
+        m_autoRecordLabel->setToolTip(QStringLiteral("Auto-recording cannot be changed while recording or streaming"));
         m_autoRecordLabel->setText(m_isStreaming
-            ? QStringLiteral("●  <span style='color:#ff6b7d;font-weight:700'>STREAMING</span>")
-            : QStringLiteral("●  <span style='color:#ffd36c;font-weight:700'>WAITING</span>"));
+            ? QStringLiteral("●  STREAMING")
+            : QStringLiteral("●  WAITING"));
+        const QString color = m_isStreaming ? QStringLiteral("#ff6b7d") : QStringLiteral("#ffd36c");
+        m_autoRecordLabel->setStyleSheet(QStringLiteral(
+            "QPushButton { background:transparent; color:%1; padding:4px 8px; font-weight:700; }"
+            "QPushButton:disabled { background:transparent; color:%1; }").arg(color));
+        if (m_autoRecordAction != nullptr) m_autoRecordAction->setEnabled(false);
         return;
     }
-    m_autoRecordLabel->setToolTip(QString());
+    m_autoRecordLabel->setEnabled(true);
+    m_autoRecordLabel->setToolTip(QStringLiteral("Click to toggle automatic recording"));
     const bool on = m_controller->autoRecordEnabled();
-    m_autoRecordLabel->setText(
-        QStringLiteral("●  Auto-recording: <span style='color:%1;font-weight:700'>%2</span>")
-            .arg(on ? QStringLiteral("#6cff6c") : QStringLiteral("#ff6b7d"),
-                 on ? QStringLiteral("ON") : QStringLiteral("OFF")));
+    m_autoRecordLabel->setText(QStringLiteral("●  Auto-recording: %1")
+                                   .arg(on ? QStringLiteral("ON") : QStringLiteral("OFF")));
+    m_autoRecordLabel->setStyleSheet(QStringLiteral(
+        "QPushButton { background:transparent; color:%1; padding:4px 8px; font-weight:700; }"
+        "QPushButton:hover { background:rgba(124,77,255,0.18); border-radius:8px; }")
+        .arg(on ? QStringLiteral("#6cff6c") : QStringLiteral("#ff6b7d")));
+    if (m_autoRecordAction != nullptr) m_autoRecordAction->setEnabled(true);
 }
 
 void MainWindow::fadeInWidget(QWidget *widget, int durationMs)
@@ -1700,6 +1732,34 @@ void MainWindow::openSettingsDialog()
     resetSpacer->setFixedHeight(6);
     form->addRow(QString(), resetSpacer);
 
+    auto *stopStreamButton = new QPushButton(QStringLiteral("Stop stream"));
+    stopStreamButton->setObjectName(QStringLiteral("StopStreamButton"));
+    stopStreamButton->setMinimumWidth(300);
+    stopStreamButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    stopStreamButton->setEnabled(m_controller->isRecording());
+    stopStreamButton->setToolTip(m_controller->isRecording()
+                                     ? QStringLiteral("Stop and finalize the current stream.")
+                                     : QStringLiteral("No stream is currently active."));
+    form->addRow(QString(), stopStreamButton);
+    connect(stopStreamButton, &QPushButton::clicked, this, [this, stopStreamButton] {
+        stopStreamButton->setProperty("stopping", true);
+        stopStreamButton->setEnabled(false);
+        stopStreamButton->setToolTip(QStringLiteral("Stopping the current stream…"));
+        m_controller->stopRecording();
+    });
+    connect(m_controller, &AppController::statusChanged, stopStreamButton,
+            [this, stopStreamButton](const QString &, bool) {
+                if (!m_controller->isRecording()) {
+                    stopStreamButton->setProperty("stopping", false);
+                }
+                const bool active = m_controller->isRecording()
+                    && !stopStreamButton->property("stopping").toBool();
+                stopStreamButton->setEnabled(active);
+                stopStreamButton->setToolTip(active
+                    ? QStringLiteral("Stop and finalize the current stream.")
+                    : QStringLiteral("No stream is currently active."));
+            });
+
     auto *resetButton = new QPushButton(QStringLiteral("Reset VodLink"));
     resetButton->setObjectName(QStringLiteral("DangerButton"));
     resetButton->setMinimumWidth(300);
@@ -1777,7 +1837,7 @@ void MainWindow::setupTray()
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
         return;
     }
-    m_tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/vodlink.png")), this);
+    m_tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/vodlink.ico")), this);
     m_tray->setToolTip(QStringLiteral("VodLink"));
 
     auto *menu = new QMenu(this);
@@ -1827,8 +1887,12 @@ void MainWindow::closeEvent(QCloseEvent *event)
         hide();
         event->ignore();
         const bool trayNotifications = m_controller->appSetting(QString::fromLatin1(kNotificationsSetting), QStringLiteral("1")) == QStringLiteral("1");
-        if (!m_trayMessageShown && trayNotifications) {
+        const bool closeTipWasShown = m_controller->appSetting(
+            QString::fromLatin1(kTrayCloseTipShownSetting), QStringLiteral("0")) == QStringLiteral("1");
+        if (!m_trayMessageShown && !closeTipWasShown && trayNotifications) {
             m_trayMessageShown = true;
+            m_controller->setAppSetting(QString::fromLatin1(kTrayCloseTipShownSetting),
+                                        QStringLiteral("1"));
             m_tray->showMessage(QStringLiteral("VodLink is still running"),
                                 QStringLiteral("VodLink keeps watching for games in the background. Quit from the tray icon to exit."),
                                 QSystemTrayIcon::Information, 4000);

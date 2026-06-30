@@ -5,7 +5,6 @@
 #include <bcrypt.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#include <winhttp.h>
 #include <windowsx.h>
 
 #include <array>
@@ -19,9 +18,6 @@
 
 #pragma comment(lib, "gdi32.lib")
 
-#ifndef VODLINK_RELEASE_TAG
-#error "VodLinkBootstrapBuild.h must define VODLINK_RELEASE_TAG as a wide string literal"
-#endif
 #ifndef VODLINK_BUILD_COMMIT
 #error "VodLinkBootstrapBuild.h must define VODLINK_BUILD_COMMIT as a wide string literal"
 #endif
@@ -30,11 +26,9 @@
 #endif
 
 namespace {
-constexpr wchar_t kSetupUrl[] =
-    L"https://github.com/Dycool/VodLink/releases/download/" VODLINK_RELEASE_TAG
-    L"/VodLink-Windows-x64-Setup.exe";
 constexpr wchar_t kBuildCommit[] = VODLINK_BUILD_COMMIT;
 constexpr char kExpectedSetupHash[] = VODLINK_SETUP_SHA256;
+constexpr int kEmbeddedSetupResource = 2;
 constexpr wchar_t kWindowClass[] = L"VodLinkBootstrapWindow";
 constexpr UINT kInstallFinished = WM_APP + 1;
 constexpr UINT kInstallStatus = WM_APP + 2;
@@ -46,7 +40,7 @@ struct InstallResult {
 
 struct WindowState {
     int animationFrame = 0;
-    std::wstring status = L"Downloading installer";
+    std::wstring status = L"Preparing installer";
     bool installing = true;
 };
 
@@ -72,80 +66,35 @@ bool launch(const std::filesystem::path &path)
                                                     path.parent_path().c_str(), SW_SHOWNORMAL)) > 32;
 }
 
-bool download(const wchar_t *url, const std::filesystem::path &destination, std::wstring *error)
+bool extractEmbeddedSetup(const std::filesystem::path &destination, std::wstring *error)
 {
-    URL_COMPONENTS parts{};
-    parts.dwStructSize = sizeof(parts);
-    parts.dwSchemeLength = static_cast<DWORD>(-1);
-    parts.dwHostNameLength = static_cast<DWORD>(-1);
-    parts.dwUrlPathLength = static_cast<DWORD>(-1);
-    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(url, 0, 0, &parts)) {
-        *error = L"Could not parse the VodLink release URL.";
+    HMODULE module = GetModuleHandleW(nullptr);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(kEmbeddedSetupResource), RT_RCDATA);
+    if (!resource) {
+        *error = L"This VodLink installer does not contain its setup payload.";
         return false;
     }
-
-    HINTERNET session = WinHttpOpen(L"VodLink Installer/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) {
-        *error = L"Could not initialize the Windows download service.";
+    HGLOBAL loaded = LoadResource(module, resource);
+    const void *data = loaded ? LockResource(loaded) : nullptr;
+    const DWORD size = SizeofResource(module, resource);
+    if (!data || size == 0) {
+        *error = L"The embedded VodLink setup payload is invalid.";
         return false;
     }
-    WinHttpSetTimeouts(session, 15000, 15000, 30000, 30000);
-
-    const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
-    std::wstring resource(parts.lpszUrlPath, parts.dwUrlPathLength);
-    resource.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
-    HINTERNET connection = WinHttpConnect(session, host.c_str(), parts.nPort, 0);
-    HINTERNET request = connection
-        ? WinHttpOpenRequest(connection, L"GET", resource.c_str(), nullptr, WINHTTP_NO_REFERER,
-                             WINHTTP_DEFAULT_ACCEPT_TYPES,
-                             parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)
-        : nullptr;
-
-    bool ok = request && WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
-        && WinHttpReceiveResponse(request, nullptr);
-    DWORD status = 0;
-    DWORD statusSize = sizeof(status);
-    if (ok) {
-        ok = WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                                 WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
-                                 WINHTTP_NO_HEADER_INDEX)
-            && status == 200;
-    }
-
-    std::ofstream output;
-    if (ok) {
+    try {
         std::filesystem::create_directories(destination.parent_path());
-        output.open(destination, std::ios::binary | std::ios::trunc);
-        ok = output.good();
+    } catch (...) {
+        *error = L"Could not create the temporary VodLink installer directory.";
+        return false;
     }
-
-    std::array<char, 64 * 1024> buffer{};
-    while (ok) {
-        DWORD received = 0;
-        if (!WinHttpReadData(request, buffer.data(), static_cast<DWORD>(buffer.size()), &received)) {
-            ok = false;
-            break;
-        }
-        if (received == 0) {
-            break;
-        }
-        output.write(buffer.data(), received);
-        ok = output.good();
-    }
+    std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+    output.write(static_cast<const char *>(data), size);
+    const bool ok = output.good();
     output.close();
-
-    if (request) WinHttpCloseHandle(request);
-    if (connection) WinHttpCloseHandle(connection);
-    WinHttpCloseHandle(session);
     if (!ok) {
         std::error_code ignored;
         std::filesystem::remove(destination, ignored);
-        *error = status == 404
-            ? L"The VodLink release this launcher was built for does not contain the Windows installer."
-            : L"The VodLink installer could not be downloaded.";
+        *error = L"The embedded VodLink setup could not be extracted.";
     }
     return ok;
 }
@@ -235,10 +184,10 @@ InstallResult install(HWND window)
         / L"VodLink-Installer" / kBuildCommit;
     const auto setup = cache / L"VodLink-Windows-x64-Setup.exe";
     std::wstring error;
-    bool ok = download(kSetupUrl, setup, &error);
-    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Verifying download"));
+    bool ok = extractEmbeddedSetup(setup, &error);
+    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Verifying installer"));
     if (ok && !verifyDownload(setup)) {
-        error = L"The downloaded installer does not match the VodLink build commit encoded in this launcher.";
+        error = L"The embedded installer does not match the VodLink build commit encoded in this launcher.";
         ok = false;
     }
     if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Installing VodLink"));
