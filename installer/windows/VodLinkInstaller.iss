@@ -34,13 +34,28 @@ Name: "{userprograms}\VodLink"; Filename: "{app}\VodLink.exe"; WorkingDir: "{app
 Filename: "{app}\VodLink.exe"; Description: "Open VodLink"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function HasCommandLineParam(const Value: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), Value) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 var
   ExistingApp: String;
   ErrorCode: Integer;
 begin
   ExistingApp := ExpandConstant('{localappdata}\VodLink\app\VodLink.exe');
-  if FileExists(ExistingApp) and not CmdLineParamExists('/VODLINKUPDATE') then
+  if FileExists(ExistingApp) and not HasCommandLineParam('/VODLINKUPDATE') then
   begin
     ShellExec('', ExistingApp, '', ExtractFileDir(ExistingApp), SW_SHOWNORMAL,
       ewNoWait, ErrorCode);
