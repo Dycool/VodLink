@@ -185,18 +185,43 @@ jobs:
             throw "Inno Setup failed with exit code $LASTEXITCODE"
           }
 
+          $setup = Join-Path $output 'VodLink-Windows-x64-Setup.exe'
+          if (!(Test-Path $setup)) { throw 'The full Windows installer was not produced.' }
+          $setupHash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          if ($setupHash -notmatch '^[0-9a-f]{64}$') {
+            throw "Invalid SHA-256 generated for the Windows installer: '$setupHash'"
+          }
+          $setupHash | Set-Content -Encoding ascii "$setup.sha256"
+
           rc.exe /nologo /i resources /fo "$output\VodLinkBootstrap.res" 'installer\windows\VodLinkBootstrap.rc'
           if ($LASTEXITCODE -ne 0) { throw 'Could not compile the installer icon.' }
+
+          # A bootstrapper must never follow releases/latest: otherwise an old
+          # launcher can silently install a different build. Tagged builds pin
+          # the exact release tag; ordinary CI builds use a deliberately
+          # unpublished identifier so they fail safely instead of drifting.
+          $releaseTag = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF_NAME
+          } else {
+            "unpublished-$env:GITHUB_SHA"
+          }
+          if ($releaseTag -notmatch '^[A-Za-z0-9._-]+$') {
+            throw "Unsafe release tag for the Windows bootstrapper: '$releaseTag'"
+          }
+          @(
+            '#pragma once'
+            "#define VODLINK_RELEASE_TAG L`"$releaseTag`""
+            "#define VODLINK_BUILD_COMMIT L`"$env:GITHUB_SHA`""
+            "#define VODLINK_SETUP_SHA256 `"$setupHash`""
+          ) | Set-Content -Encoding ascii "$output\VodLinkBootstrapBuild.h"
+
           cl.exe /nologo /std:c++20 /O2 /EHsc `
+            "/I$output" `
             'installer\windows\VodLinkBootstrap.cpp' "$output\VodLinkBootstrap.res" `
             /Fe:"$output\VodLink-Windows-x64.exe" /link /SUBSYSTEM:WINDOWS `
             winhttp.lib bcrypt.lib shell32.lib ole32.lib user32.lib
           if ($LASTEXITCODE -ne 0) { throw 'Could not compile the VodLink launcher.' }
-
-          $setup = Join-Path $output 'VodLink-Windows-x64-Setup.exe'
-          if (!(Test-Path $setup)) { throw 'The full Windows installer was not produced.' }
-          (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant() |
-            Set-Content -Encoding ascii "$setup.sha256"
+          Remove-Item "$output\VodLinkBootstrapBuild.h", "$output\VodLinkBootstrap.res" -Force
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4

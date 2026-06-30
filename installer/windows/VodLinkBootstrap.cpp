@@ -13,11 +13,24 @@
 #include <string>
 #include <vector>
 
+#include "VodLinkBootstrapBuild.h"
+
+#ifndef VODLINK_RELEASE_TAG
+#error "VodLinkBootstrapBuild.h must define VODLINK_RELEASE_TAG as a wide string literal"
+#endif
+#ifndef VODLINK_BUILD_COMMIT
+#error "VodLinkBootstrapBuild.h must define VODLINK_BUILD_COMMIT as a wide string literal"
+#endif
+#ifndef VODLINK_SETUP_SHA256
+#error "VodLinkBootstrapBuild.h must define VODLINK_SETUP_SHA256 as a narrow string literal"
+#endif
+
 namespace {
 constexpr wchar_t kSetupUrl[] =
-    L"https://github.com/Dycool/VodLink/releases/latest/download/VodLink-Windows-x64-Setup.exe";
-constexpr wchar_t kHashUrl[] =
-    L"https://github.com/Dycool/VodLink/releases/latest/download/VodLink-Windows-x64-Setup.exe.sha256";
+    L"https://github.com/Dycool/VodLink/releases/download/" VODLINK_RELEASE_TAG
+    L"/VodLink-Windows-x64-Setup.exe";
+constexpr wchar_t kBuildCommit[] = VODLINK_BUILD_COMMIT;
+constexpr char kExpectedSetupHash[] = VODLINK_SETUP_SHA256;
 
 std::filesystem::path localAppData()
 {
@@ -113,23 +126,10 @@ bool download(const wchar_t *url, const std::filesystem::path &destination, std:
         std::error_code ignored;
         std::filesystem::remove(destination, ignored);
         *error = status == 404
-            ? L"The latest VodLink release does not contain the Windows installer."
+            ? L"The VodLink release this launcher was built for does not contain the Windows installer."
             : L"The VodLink installer could not be downloaded.";
     }
     return ok;
-}
-
-std::string trimHash(std::string value)
-{
-    const auto first = value.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return {};
-    value.erase(0, first);
-    const auto end = value.find_first_of(" \t\r\n");
-    if (end != std::string::npos) value.erase(end);
-    for (char &c : value) {
-        if (c >= 'A' && c <= 'F') c = static_cast<char>(c - 'A' + 'a');
-    }
-    return value;
 }
 
 std::string sha256(const std::filesystem::path &path)
@@ -183,12 +183,11 @@ std::string sha256(const std::filesystem::path &path)
     return result;
 }
 
-bool verifyDownload(const std::filesystem::path &setup, const std::filesystem::path &hashFile)
+bool verifyDownload(const std::filesystem::path &setup)
 {
-    std::ifstream input(hashFile, std::ios::binary);
-    std::string expected((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    expected = trimHash(expected);
-    return expected.size() == 64 && expected == sha256(setup);
+    constexpr std::size_t kSha256HexLength = 64;
+    return std::char_traits<char>::length(kExpectedSetupHash) == kSha256HexLength
+        && sha256(setup) == kExpectedSetupHash;
 }
 
 bool runSetup(const std::filesystem::path &setup)
@@ -220,13 +219,13 @@ int installInBackground()
         return 0;
     }
 
-    const auto cache = std::filesystem::temp_directory_path() / L"VodLink-Installer";
+    const auto cache = std::filesystem::temp_directory_path()
+        / L"VodLink-Installer" / kBuildCommit;
     const auto setup = cache / L"VodLink-Windows-x64-Setup.exe";
-    const auto hash = cache / L"VodLink-Windows-x64-Setup.exe.sha256";
     std::wstring error;
-    bool ok = download(kSetupUrl, setup, &error) && download(kHashUrl, hash, &error);
-    if (ok && !verifyDownload(setup, hash)) {
-        error = L"The downloaded VodLink installer failed its SHA-256 verification.";
+    bool ok = download(kSetupUrl, setup, &error);
+    if (ok && !verifyDownload(setup)) {
+        error = L"The downloaded installer does not match the VodLink build commit encoded in this launcher.";
         ok = false;
     }
     if (ok && !runSetup(setup)) {
@@ -240,7 +239,6 @@ int installInBackground()
 
     std::error_code ignored;
     std::filesystem::remove(setup, ignored);
-    std::filesystem::remove(hash, ignored);
     ReleaseMutex(mutex);
     CloseHandle(mutex);
     if (!ok) {
