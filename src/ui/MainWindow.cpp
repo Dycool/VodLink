@@ -904,9 +904,10 @@ void MainWindow::buildUi()
         QPushButton#GhostButton, QToolButton#GhostButton { background: rgba(11, 16, 26, 0.75); border: 1px solid rgba(128, 141, 169, 0.22); font-weight: 600; }
         QPushButton#GhostButton:hover, QToolButton#GhostButton:hover { background: rgba(124, 77, 255, 0.18); border: 1px solid rgba(143, 102, 255, 0.7); }
         QPushButton#DangerButton { background: rgba(255, 68, 90, 0.16); color: #ff6b7d; border: 1px solid rgba(255, 68, 90, 0.32); }
-        QPushButton#VodCard { text-align: left; background: rgba(13, 19, 30, 0.92); border: 1px solid rgba(128, 141, 169, 0.18); border-radius: 16px; padding: 0px; }
-        QPushButton#VodCard:hover { border: 1px solid rgba(138, 92, 255, 0.72); background: rgba(20, 27, 42, 0.96); }
-        QPushButton#VodCard[selected="true"] { border: 2px solid #7c4dff; background: rgba(34, 24, 68, 0.55); }
+        QAbstractButton#VodCard { text-align: left; background: rgba(13, 19, 30, 0.92); border: 1px solid rgba(128, 141, 169, 0.18); border-radius: 16px; padding: 0px; }
+        QAbstractButton#VodCard:hover { border: 1px solid rgba(138, 92, 255, 0.72); background: rgba(20, 27, 42, 0.96); }
+        QAbstractButton#VodCard[selected="true"] { border: 2px solid #7c4dff; background: rgba(34, 24, 68, 0.55); }
+        QToolButton#VodCard { qproperty-toolButtonStyle: ToolButtonTextUnderIcon; qproperty-autoRaise: false; text-align: center; padding: 10px; font-weight: 800; }
         QScrollArea { border: 0; background: transparent; }
         QScrollBar:vertical { background: transparent; width: 10px; margin: 4px; }
         QScrollBar::handle:vertical { background: rgba(127, 139, 168, 0.35); border-radius: 5px; }
@@ -1994,21 +1995,23 @@ void MainWindow::rebuildVodGrid()
     constexpr int columns = 3;
     for (int i = 0; i < m_filteredVods.size(); ++i) {
         const Vod &vod = m_filteredVods.at(i);
-        auto *card = new QPushButton;
+        auto *card = new QToolButton;
         card->setObjectName(QStringLiteral("VodCard"));
         card->setCursor(Qt::PointingHandCursor);
         card->setCheckable(true);
+        card->setAutoRaise(false);
+        card->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         card->setProperty("selected", i == m_selectedVodRow);
         card->setProperty("vodRow", i);
         card->setText(cardText(vod));
         card->setIcon(vodPlaceholderIcon(vod.game));
         constexpr int kVodCardSize = 220;
-        card->setIconSize(QSize(kVodCardSize - 20, 118));
+        card->setIconSize(QSize(kVodCardSize - 28, 108));
         card->setFixedSize(kVodCardSize, kVodCardSize);
         card->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         card->setStyleSheet(card->styleSheet());
         requestVodThumbnail(vod, card);
-        connect(card, &QPushButton::clicked, this, [this, i] { selectVod(i); });
+        connect(card, &QToolButton::clicked, this, [this, i] { selectVod(i); });
         m_vodGridLayout->addWidget(card, i / columns, i % columns);
     }
     m_vodGridLayout->setRowStretch((m_filteredVods.size() + columns - 1) / columns, 1);
@@ -2025,8 +2028,8 @@ void MainWindow::updateVodCardSelection()
         return;
     }
 
-    const auto cards = m_vodGridWidget->findChildren<QPushButton *>(QString(), Qt::FindChildrenRecursively);
-    for (QPushButton *card : cards) {
+    const auto cards = m_vodGridWidget->findChildren<QAbstractButton *>(QString(), Qt::FindChildrenRecursively);
+    for (QAbstractButton *card : cards) {
         if (card == nullptr || card->objectName() != QStringLiteral("VodCard")) {
             continue;
         }
@@ -2565,8 +2568,8 @@ QString MainWindow::vodLabel(const Vod &vod)
 QString MainWindow::cardText(const Vod &vod)
 {
     const QString owner = ownerText(vod);
-    return QStringLiteral("\n%1\n%2\n%3 · %4 · %5")
-        .arg(normalizeTitle(vod), vod.game, relativeTimeText(vod.startedAt), durationText(vod.durationMs), owner);
+    return QStringLiteral("%1\n%2 · %3\n%4")
+        .arg(normalizeTitle(vod), relativeTimeText(vod.startedAt), durationText(vod.durationMs), owner);
 }
 
 QString MainWindow::youtubeWatchUrl(const QString &videoId, int startSeconds)

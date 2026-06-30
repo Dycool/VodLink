@@ -78,6 +78,20 @@ bool envFlagEnabled(const char *name)
     return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+float envFloatOrDefault(const char *name, float fallback, float minValue, float maxValue)
+{
+    const QByteArray raw = qgetenv(name).trimmed();
+    if (raw.isEmpty()) {
+        return fallback;
+    }
+    bool ok = false;
+    const float parsed = raw.toFloat(&ok);
+    if (!ok) {
+        return fallback;
+    }
+    return std::clamp(parsed, minValue, maxValue);
+}
+
 QString qstr(const char *value)
 {
     return QString::fromUtf8(value == nullptr ? "" : value);
@@ -334,6 +348,25 @@ QStringList microphoneSourceCandidates(RtmpStreamer::AudioCaptureSource source)
 #else
     return {QStringLiteral("pulse_input_capture")};
 #endif
+}
+
+float captureSourceVolumeMultiplier(const QString &sourceId, RtmpStreamer::AudioCaptureSource source)
+{
+    if (source == RtmpStreamer::AudioCaptureSource::GameOnly) {
+        return 1.0F;
+    }
+
+    // OBS' per-process WASAPI source tends to come in close to the game's own
+    // peak level, while default desktop/mic capture follows Windows/system
+    // device volume and can sound much quieter on YouTube. Give the external
+    // audio path a moderate default lift, with env overrides for power users.
+    if (sourceId == QStringLiteral("wasapi_input_capture")
+        || sourceId == QStringLiteral("pulse_input_capture")
+        || sourceId.startsWith(QStringLiteral("coreaudio_input_capture"))) {
+        return envFloatOrDefault("VODLINK_MIC_AUDIO_GAIN", 1.6F, 0.1F, 6.0F);
+    }
+
+    return envFloatOrDefault("VODLINK_SYSTEM_AUDIO_GAIN", 2.0F, 0.1F, 6.0F);
 }
 
 enum class VideoCodecChoice { H264, HEVC, AV1 };
@@ -2200,10 +2233,12 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
         const QByteArray id = utf8(sourceId);
         m_obs->audioSource = obs_source_create_private(id.constData(), "VodLink Audio", settings.get());
         if (m_obs->audioSource != nullptr && addSourceToScene(m_obs->scene, m_obs->audioSource, m_outputSize)) {
+            const float volume = captureSourceVolumeMultiplier(sourceId, audioSource);
+            obs_source_set_volume(m_obs->audioSource, volume);
             obs_source_set_audio_mixers(m_obs->audioSource, 1);
             obs_source_set_monitoring_type(m_obs->audioSource, OBS_MONITORING_TYPE_NONE);
             m_obs->audioSourceId = sourceId;
-            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("audio source created %1").arg(sourceId));
+            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("audio source created %1 volume=%2").arg(sourceId).arg(volume));
             break;
         }
         if (m_obs->audioSource != nullptr) {
@@ -2222,10 +2257,12 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
         const QByteArray id = utf8(sourceId);
         m_obs->micSource = obs_source_create_private(id.constData(), "VodLink Microphone", settings.get());
         if (m_obs->micSource != nullptr && addSourceToScene(m_obs->scene, m_obs->micSource, m_outputSize)) {
+            const float volume = captureSourceVolumeMultiplier(sourceId, audioSource);
+            obs_source_set_volume(m_obs->micSource, volume);
             obs_source_set_audio_mixers(m_obs->micSource, 1);
             obs_source_set_monitoring_type(m_obs->micSource, OBS_MONITORING_TYPE_NONE);
             m_obs->micSourceId = sourceId;
-            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source created %1").arg(sourceId));
+            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source created %1 volume=%2").arg(sourceId).arg(volume));
             break;
         }
         if (m_obs->micSource != nullptr) {

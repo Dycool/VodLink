@@ -3,10 +3,12 @@
 #include "PlayerBridge.h"
 
 #include "app/AppPaths.h"
+#include "app/DebugLog.h"
 
 #include <QFile>
 #include <QIODevice>
 #include <QUrl>
+#include <QTimer>
 #include <QDir>
 #include <QStandardPaths>
 #include <QStringList>
@@ -32,13 +34,50 @@ public:
 
     void interceptRequest(QWebEngineUrlRequestInfo &info) override
     {
-        const QString host = info.requestUrl().host().toLower();
+        const QUrl url = info.requestUrl();
+        const QString host = url.host().toLower();
         if (host.endsWith(QStringLiteral("youtube.com"))
             || host.endsWith(QStringLiteral("youtube-nocookie.com"))
             || host.endsWith(QStringLiteral("ytimg.com"))
             || host.endsWith(QStringLiteral("googlevideo.com"))) {
             info.setHttpHeader(QByteArrayLiteral("Referer"), QByteArray(kPlayerOrigin));
+            DebugLog::writeCategory(QStringLiteral("LiteYouTube/Request"),
+                                    QStringLiteral("%1 %2")
+                                        .arg(QString::fromLatin1(info.requestMethod()), url.toString(QUrl::RemoveQuery)));
         }
+    }
+};
+
+class PlayerPage final : public QWebEnginePage
+{
+public:
+    explicit PlayerPage(QWebEngineProfile *profile, QObject *parent = nullptr)
+        : QWebEnginePage(profile, parent)
+    {
+    }
+
+protected:
+    void javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level, const QString &message,
+                                  int lineNumber, const QString &sourceId) override
+    {
+        QString levelName = QStringLiteral("log");
+        switch (level) {
+        case InfoMessageLevel:
+            levelName = QStringLiteral("info");
+            break;
+        case WarningMessageLevel:
+            levelName = QStringLiteral("warning");
+            break;
+        case ErrorMessageLevel:
+            levelName = QStringLiteral("error");
+            break;
+        }
+        DebugLog::writeCategory(QStringLiteral("LiteYouTube/Console"),
+                                QStringLiteral("%1:%2 [%3] %4")
+                                    .arg(sourceId.isEmpty() ? QStringLiteral("<inline>") : sourceId)
+                                    .arg(lineNumber)
+                                    .arg(levelName, message));
+        QWebEnginePage::javaScriptConsoleMessage(level, message, lineNumber, sourceId);
     }
 };
 }
@@ -67,8 +106,25 @@ SyncPlayer::SyncPlayer(QWidget *parent)
         m_profile->setPersistentStoragePath(playerCache);
     }
     m_profile->setUrlRequestInterceptor(new PlayerRequestInterceptor(m_profile));
-    auto *page = new QWebEnginePage(m_profile, m_view);
+    auto *page = new PlayerPage(m_profile, m_view);
     m_view->setPage(page);
+    DebugLog::writeCategory(QStringLiteral("LiteYouTube"),
+                            QStringLiteral("QWebEngine profile created origin=%1 cacheRoot=%2")
+                                .arg(QString::fromLatin1(kPlayerOrigin), cacheRoot));
+    connect(page, &QWebEnginePage::loadStarted, this, [] {
+        DebugLog::writeCategory(QStringLiteral("LiteYouTube"), QStringLiteral("player page load started"));
+    });
+    connect(page, &QWebEnginePage::loadFinished, this, [](bool ok) {
+        DebugLog::writeCategory(QStringLiteral("LiteYouTube"),
+                                QStringLiteral("player page load finished ok=%1").arg(ok));
+    });
+    connect(page, &QWebEnginePage::renderProcessTerminated, this,
+            [](QWebEnginePage::RenderProcessTerminationStatus status, int exitCode) {
+                DebugLog::writeCategory(QStringLiteral("LiteYouTube"),
+                                        QStringLiteral("Qt WebEngine render process terminated status=%1 exitCode=%2")
+                                            .arg(static_cast<int>(status))
+                                            .arg(exitCode));
+            });
     m_view->settings()->setAttribute(QWebEngineSettings::PlaybackRequiresUserGesture, false);
     m_view->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
     m_view->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);

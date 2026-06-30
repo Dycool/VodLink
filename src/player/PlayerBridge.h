@@ -29,6 +29,7 @@ public slots:
     // Invoked from JavaScript.
     void ready();
     void onTimeUpdate(double seconds);
+    void debugLog(const QString &category, const QString &message);
 
 signals:
     // To the page.
