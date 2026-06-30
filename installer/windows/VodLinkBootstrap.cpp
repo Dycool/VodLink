@@ -6,14 +6,18 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <winhttp.h>
+#include <windowsx.h>
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "VodLinkBootstrapBuild.h"
+
+#pragma comment(lib, "gdi32.lib")
 
 #ifndef VODLINK_RELEASE_TAG
 #error "VodLinkBootstrapBuild.h must define VODLINK_RELEASE_TAG as a wide string literal"
@@ -31,6 +35,20 @@ constexpr wchar_t kSetupUrl[] =
     L"/VodLink-Windows-x64-Setup.exe";
 constexpr wchar_t kBuildCommit[] = VODLINK_BUILD_COMMIT;
 constexpr char kExpectedSetupHash[] = VODLINK_SETUP_SHA256;
+constexpr wchar_t kWindowClass[] = L"VodLinkBootstrapWindow";
+constexpr UINT kInstallFinished = WM_APP + 1;
+constexpr UINT kInstallStatus = WM_APP + 2;
+
+struct InstallResult {
+    bool ok = false;
+    std::wstring error;
+};
+
+struct WindowState {
+    int animationFrame = 0;
+    std::wstring status = L"Downloading installer";
+    bool installing = true;
+};
 
 std::filesystem::path localAppData()
 {
@@ -211,27 +229,24 @@ bool runSetup(const std::filesystem::path &setup)
     return exitCode == 0;
 }
 
-int installInBackground()
+InstallResult install(HWND window)
 {
-    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\VodLinkBackgroundInstaller");
-    if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (mutex) CloseHandle(mutex);
-        return 0;
-    }
-
     const auto cache = std::filesystem::temp_directory_path()
         / L"VodLink-Installer" / kBuildCommit;
     const auto setup = cache / L"VodLink-Windows-x64-Setup.exe";
     std::wstring error;
     bool ok = download(kSetupUrl, setup, &error);
+    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Verifying download"));
     if (ok && !verifyDownload(setup)) {
         error = L"The downloaded installer does not match the VodLink build commit encoded in this launcher.";
         ok = false;
     }
+    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Installing VodLink"));
     if (ok && !runSetup(setup)) {
         error = L"VodLink could not be installed.";
         ok = false;
     }
+    if (ok) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Opening VodLink"));
     if (ok && !launch(installedApp())) {
         error = L"VodLink was installed, but could not be opened.";
         ok = false;
@@ -239,50 +254,192 @@ int installInBackground()
 
     std::error_code ignored;
     std::filesystem::remove(setup, ignored);
-    ReleaseMutex(mutex);
-    CloseHandle(mutex);
-    if (!ok) {
-        MessageBoxW(nullptr, error.c_str(), L"VodLink", MB_OK | MB_ICONERROR);
-        return 1;
-    }
+    return {ok, std::move(error)};
+}
+
+DWORD WINAPI installWorker(void *context)
+{
+    auto *result = new InstallResult(install(static_cast<HWND>(context)));
+    PostMessageW(static_cast<HWND>(context), kInstallFinished, 0,
+                 reinterpret_cast<LPARAM>(result));
     return 0;
 }
 
-bool spawnBackgroundWorker()
+void drawCenteredText(HDC dc, const RECT &area, const wchar_t *text, HFONT font, COLORREF color)
 {
-    std::array<wchar_t, 32768> executable{};
-    if (!GetModuleFileNameW(nullptr, executable.data(),
-                            static_cast<DWORD>(executable.size()))) return false;
-    std::wstring command = L"\"" + std::wstring(executable.data()) + L"\" --install-background";
-    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
-    mutableCommand.push_back(L'\0');
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    const bool started = CreateProcessW(executable.data(), mutableCommand.data(), nullptr, nullptr,
-                                        FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr,
-                                        &startup, &process);
-    if (started) {
-        CloseHandle(process.hThread);
-        CloseHandle(process.hProcess);
+    HGDIOBJ previousFont = SelectObject(dc, font);
+    SetTextColor(dc, color);
+    SetBkMode(dc, TRANSPARENT);
+    RECT target = area;
+    DrawTextW(dc, text, -1, &target, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, previousFont);
+}
+
+LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    auto *state = reinterpret_cast<WindowState *>(GetWindowLongPtrW(window, GWLP_USERDATA));
+    switch (message) {
+    case WM_CREATE:
+        state = new WindowState;
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+        SetTimer(window, 1, 180, nullptr);
+        return 0;
+    case WM_TIMER:
+        if (state) {
+            state->animationFrame = (state->animationFrame + 1) % 8;
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        RECT client{};
+        GetClientRect(window, &client);
+        HBRUSH background = CreateSolidBrush(RGB(8, 13, 22));
+        FillRect(dc, &client, background);
+        DeleteObject(background);
+
+        HPEN border = CreatePen(PS_SOLID, 1, RGB(64, 48, 104));
+        HGDIOBJ previousBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        HGDIOBJ previousPen = SelectObject(dc, border);
+        RoundRect(dc, 1, 1, client.right - 1, client.bottom - 1, 20, 20);
+        SelectObject(dc, previousPen);
+        SelectObject(dc, previousBrush);
+        DeleteObject(border);
+
+        HICON icon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1),
+                                                   IMAGE_ICON, 72, 72, LR_DEFAULTCOLOR));
+        if (icon) {
+            DrawIconEx(dc, (client.right - 72) / 2, 24, icon, 72, 72, 0, nullptr, DI_NORMAL);
+            DestroyIcon(icon);
+        }
+
+        HFONT titleFont = CreateFontW(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        RECT title{0, 99, client.right, 140};
+        drawCenteredText(dc, title, L"VodLink", titleFont, RGB(244, 247, 251));
+        DeleteObject(titleFont);
+
+        HFONT statusFont = CreateFontW(17, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                       CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        RECT statusRect{0, 151, client.right, 180};
+        drawCenteredText(dc, statusRect, state ? state->status.c_str() : L"Installing VodLink",
+                         statusFont, RGB(183, 191, 208));
+        DeleteObject(statusFont);
+
+        if (state) {
+            for (int i = 0; i < 8; ++i) {
+                const double angle = (i * 3.141592653589793 * 2.0) / 8.0;
+                const int x = client.right / 2 + static_cast<int>(24 * cos(angle));
+                const int y = 211 + static_cast<int>(9 * sin(angle));
+                const int distance = (i - state->animationFrame + 8) % 8;
+                const int brightness = 75 + (7 - distance) * 20;
+                const int red = brightness < 143 ? brightness : 143;
+                const int green = brightness < 102 ? brightness : 102;
+                const int blue = brightness + 70 < 255 ? brightness + 70 : 255;
+                HBRUSH dot = CreateSolidBrush(RGB(red, green, blue));
+                RECT circle{x - 3, y - 3, x + 4, y + 4};
+                HBRUSH previous = static_cast<HBRUSH>(SelectObject(dc, dot));
+                Ellipse(dc, circle.left, circle.top, circle.right, circle.bottom);
+                SelectObject(dc, previous);
+                DeleteObject(dot);
+            }
+        }
+        EndPaint(window, &paint);
+        return 0;
     }
-    return started;
+    case kInstallStatus:
+        if (state) {
+            state->status = reinterpret_cast<const wchar_t *>(lParam);
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
+    case kInstallFinished: {
+        auto *result = reinterpret_cast<InstallResult *>(lParam);
+        if (state) state->installing = false;
+        if (!result->ok) {
+            MessageBoxW(window, result->error.c_str(), L"VodLink", MB_OK | MB_ICONERROR);
+        }
+        delete result;
+        DestroyWindow(window);
+        return 0;
+    }
+    case WM_CLOSE:
+        if (state && state->installing) return 0;
+        DestroyWindow(window);
+        return 0;
+    case WM_DESTROY:
+        KillTimer(window, 1);
+        delete state;
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
 }
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
-    if (std::wstring(commandLine).find(L"--install-background") != std::wstring::npos) {
-        return installInBackground();
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\VodLinkInstaller");
+    if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (HWND existing = FindWindowW(kWindowClass, nullptr)) {
+            ShowWindow(existing, SW_RESTORE);
+            SetForegroundWindow(existing);
+        }
+        if (mutex) CloseHandle(mutex);
+        return 0;
     }
     const auto app = installedApp();
     if (std::filesystem::is_regular_file(app)) {
-        return launch(app) ? 0 : 1;
+        const int result = launch(app) ? 0 : 1;
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return result;
     }
-    if (!spawnBackgroundWorker()) {
-        MessageBoxW(nullptr, L"The VodLink background installer could not be started.",
-                    L"VodLink", MB_OK | MB_ICONERROR);
+
+    WNDCLASSEXW windowClass{sizeof(windowClass)};
+    windowClass.lpfnWndProc = windowProc;
+    windowClass.hInstance = instance;
+    windowClass.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
+    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.lpszClassName = kWindowClass;
+    if (!RegisterClassExW(&windowClass)) {
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
         return 1;
     }
-    return 0;
+    const int width = 400;
+    const int height = 270;
+    const int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
+    const int y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
+    HWND window = CreateWindowExW(WS_EX_APPWINDOW, kWindowClass, L"Installing VodLink",
+                                  WS_POPUP, x, y, width, height, nullptr, nullptr, instance, nullptr);
+    if (!window) {
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return 1;
+    }
+    ShowWindow(window, SW_SHOW);
+    UpdateWindow(window);
+    HANDLE worker = CreateThread(nullptr, 0, installWorker, window, 0, nullptr);
+    if (!worker) {
+        MessageBoxW(window, L"The VodLink installer could not be started.", L"VodLink",
+                    MB_OK | MB_ICONERROR);
+        DestroyWindow(window);
+    } else {
+        CloseHandle(worker);
+    }
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    ReleaseMutex(mutex);
+    CloseHandle(mutex);
+    return static_cast<int>(message.wParam);
 }
