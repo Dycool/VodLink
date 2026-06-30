@@ -904,10 +904,15 @@ void MainWindow::buildUi()
         QPushButton#GhostButton, QToolButton#GhostButton { background: rgba(11, 16, 26, 0.75); border: 1px solid rgba(128, 141, 169, 0.22); font-weight: 600; }
         QPushButton#GhostButton:hover, QToolButton#GhostButton:hover { background: rgba(124, 77, 255, 0.18); border: 1px solid rgba(143, 102, 255, 0.7); }
         QPushButton#DangerButton { background: rgba(255, 68, 90, 0.16); color: #ff6b7d; border: 1px solid rgba(255, 68, 90, 0.32); }
-        QAbstractButton#VodCard { text-align: left; background: rgba(13, 19, 30, 0.92); border: 1px solid rgba(128, 141, 169, 0.18); border-radius: 16px; padding: 0px; }
-        QAbstractButton#VodCard:hover { border: 1px solid rgba(138, 92, 255, 0.72); background: rgba(20, 27, 42, 0.96); }
-        QAbstractButton#VodCard[selected="true"] { border: 2px solid #7c4dff; background: rgba(34, 24, 68, 0.55); }
-        QToolButton#VodCard { qproperty-toolButtonStyle: ToolButtonTextUnderIcon; qproperty-autoRaise: false; text-align: center; padding: 10px; font-weight: 800; }
+        QPushButton#VodCard { text-align: left; background: rgba(13, 19, 30, 0.96); border: 1px solid rgba(128, 141, 169, 0.18); border-radius: 18px; padding: 0px; }
+        QPushButton#VodCard:hover { border: 1px solid rgba(138, 92, 255, 0.78); background: rgba(18, 24, 38, 0.98); }
+        QPushButton#VodCard[selected="true"] { border: 2px solid #7c4dff; background: rgba(28, 22, 52, 0.92); }
+        QFrame#VodThumbFrame { background: rgba(6, 10, 17, 0.95); border: 1px solid rgba(128, 141, 169, 0.16); border-radius: 12px; }
+        QLabel#VodThumb { background: #050811; border-radius: 12px; }
+        QLabel#VodDurationBadge { background: rgba(5, 7, 12, 0.86); color: #f8fbff; border-radius: 9px; padding: 3px 8px; font-size: 11px; font-weight: 800; }
+        QLabel#VodTitle { color: #f6f8fc; font-size: 15px; font-weight: 800; }
+        QLabel#VodGame { color: #b7bfd0; font-size: 13px; font-weight: 600; }
+        QLabel#VodMeta { color: #8e98ad; font-size: 12px; font-weight: 600; }
         QScrollArea { border: 0; background: transparent; }
         QScrollBar:vertical { background: transparent; width: 10px; margin: 4px; }
         QScrollBar::handle:vertical { background: rgba(127, 139, 168, 0.35); border-radius: 5px; }
@@ -1995,23 +2000,104 @@ void MainWindow::rebuildVodGrid()
     constexpr int columns = 3;
     for (int i = 0; i < m_filteredVods.size(); ++i) {
         const Vod &vod = m_filteredVods.at(i);
-        auto *card = new QToolButton;
+        auto *card = new QPushButton;
         card->setObjectName(QStringLiteral("VodCard"));
         card->setCursor(Qt::PointingHandCursor);
         card->setCheckable(true);
-        card->setAutoRaise(false);
-        card->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        card->setFlat(true);
         card->setProperty("selected", i == m_selectedVodRow);
         card->setProperty("vodRow", i);
-        card->setText(cardText(vod));
-        card->setIcon(vodPlaceholderIcon(vod.game));
-        constexpr int kVodCardSize = 220;
-        card->setIconSize(QSize(kVodCardSize - 28, 108));
-        card->setFixedSize(kVodCardSize, kVodCardSize);
+        constexpr int kVodCardWidth = 238;
+        constexpr int kVodCardHeight = 264;
+        card->setFixedSize(kVodCardWidth, kVodCardHeight);
         card->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+
+        auto *layout = new QVBoxLayout(card);
+        layout->setContentsMargins(10, 10, 10, 12);
+        layout->setSpacing(8);
+
+        auto *thumbFrame = new QFrame(card);
+        thumbFrame->setObjectName(QStringLiteral("VodThumbFrame"));
+        thumbFrame->setFixedSize(kVodCardWidth - 20, 126);
+        auto *thumbGrid = new QGridLayout(thumbFrame);
+        thumbGrid->setContentsMargins(0, 0, 0, 0);
+        thumbGrid->setSpacing(0);
+
+        auto *thumb = new QLabel(thumbFrame);
+        thumb->setObjectName(QStringLiteral("VodThumb"));
+        thumb->setAlignment(Qt::AlignCenter);
+        thumb->setFixedSize(kVodCardWidth - 20, 126);
+        thumb->setPixmap(vodPlaceholderIcon(vod.game).pixmap(thumb->size()));
+        thumbGrid->addWidget(thumb, 0, 0);
+
+        auto *durationBadge = new QLabel(durationText(vod.durationMs), thumbFrame);
+        durationBadge->setObjectName(QStringLiteral("VodDurationBadge"));
+        durationBadge->setAlignment(Qt::AlignCenter);
+        durationBadge->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        thumbGrid->addWidget(durationBadge, 0, 0, Qt::AlignTop | Qt::AlignRight);
+        layout->addWidget(thumbFrame, 0, Qt::AlignHCenter);
+
+        auto *title = new QLabel(normalizeTitle(vod), card);
+        title->setObjectName(QStringLiteral("VodTitle"));
+        title->setWordWrap(true);
+        title->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        title->setMaximumHeight(40);
+        layout->addWidget(title);
+
+        auto *game = new QLabel(vod.game.trimmed().isEmpty() ? QStringLiteral("YouTube VOD") : vod.game.trimmed(), card);
+        game->setObjectName(QStringLiteral("VodGame"));
+        game->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        game->setMaximumHeight(18);
+        layout->addWidget(game);
+
+        auto *meta = new QLabel(QStringLiteral("%1 • %2").arg(relativeTimeText(vod.startedAt), durationText(vod.durationMs)), card);
+        meta->setObjectName(QStringLiteral("VodMeta"));
+        meta->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        meta->setWordWrap(false);
+        layout->addWidget(meta);
+
+        const QVector<Vod> linkedFriends = linkedFriendVodsForCard(vod);
+        if (!linkedFriends.isEmpty()) {
+            auto *bottomRow = new QHBoxLayout;
+            bottomRow->setContentsMargins(0, 2, 0, 0);
+            bottomRow->setSpacing(8);
+
+            auto *friendCount = new QLabel(QStringLiteral("%1 friend%2")
+                                                 .arg(linkedFriends.size())
+                                                 .arg(linkedFriends.size() == 1 ? QString() : QStringLiteral("s")),
+                                             card);
+            friendCount->setObjectName(QStringLiteral("VodMeta"));
+            bottomRow->addWidget(friendCount, 0, Qt::AlignLeft | Qt::AlignVCenter);
+            bottomRow->addStretch(1);
+
+            auto *avatars = new QWidget(card);
+            auto *avatarsLayout = new QHBoxLayout(avatars);
+            avatarsLayout->setContentsMargins(0, 0, 0, 0);
+            avatarsLayout->setSpacing(-6);
+            const int avatarCount = std::min(3, linkedFriends.size());
+            for (int avatarIndex = 0; avatarIndex < avatarCount; ++avatarIndex) {
+                const Vod &friendVod = linkedFriends.at(avatarIndex);
+                const QString label = ownerText(friendVod);
+                auto *avatar = new QLabel(avatars);
+                avatar->setObjectName(QStringLiteral("cardAvatar"));
+                avatar->setFixedSize(24, 24);
+                avatar->setScaledContents(true);
+                avatar->setAlignment(Qt::AlignCenter);
+                avatar->setStyleSheet(QStringLiteral("background:#0b101a; border:2px solid #0d131e; border-radius:12px;"));
+                avatar->setProperty("profileUrl", friendVod.ownerPictureUrl);
+                avatar->setPixmap(m_avatarCache.value(friendVod.ownerPictureUrl,
+                                                      fallbackProfileIcon(label)).pixmap(24, 24));
+                avatarsLayout->addWidget(avatar);
+                requestProfileIcon(friendVod.ownerPictureUrl);
+            }
+            bottomRow->addWidget(avatars, 0, Qt::AlignRight | Qt::AlignVCenter);
+            layout->addLayout(bottomRow);
+        }
+        layout->addStretch(1);
+
         card->setStyleSheet(card->styleSheet());
         requestVodThumbnail(vod, card);
-        connect(card, &QToolButton::clicked, this, [this, i] { selectVod(i); });
+        connect(card, &QPushButton::clicked, this, [this, i] { selectVod(i); });
         m_vodGridLayout->addWidget(card, i / columns, i % columns);
     }
     m_vodGridLayout->setRowStretch((m_filteredVods.size() + columns - 1) / columns, 1);
@@ -2374,6 +2460,34 @@ void MainWindow::reloadFriends()
     }
 }
 
+QVector<Vod> MainWindow::linkedFriendVodsForCard(const Vod &vod) const
+{
+    QVector<Vod> friends;
+    QSet<QString> seenIds;
+    const QString selectedId = vod.youtubeId.trimmed();
+    for (const Vod &candidate : m_libraryVods) {
+        const QString candidateId = candidate.youtubeId.trimmed();
+        if (candidateId.isEmpty() || candidateId == selectedId) {
+            continue;
+        }
+        if (candidate.game.compare(vod.game, Qt::CaseInsensitive) != 0 || !vodsOverlap(vod, candidate)) {
+            continue;
+        }
+        if (candidate.ownerEmail.trimmed().isEmpty()) {
+            continue;
+        }
+        if (seenIds.contains(candidateId)) {
+            continue;
+        }
+        seenIds.insert(candidateId);
+        friends.push_back(candidate);
+    }
+    std::sort(friends.begin(), friends.end(), [](const Vod &a, const Vod &b) {
+        return a.startedAt < b.startedAt;
+    });
+    return friends;
+}
+
 void MainWindow::onAccountChanged(const QString &email)
 {
     updateAuthGate();
@@ -2677,6 +2791,19 @@ void MainWindow::requestProfileIcon(const QString &pictureUrl)
     });
 }
 
+void applyVodThumbnailToCard(QAbstractButton *button, const QPixmap &pixmap)
+{
+    if (button == nullptr || pixmap.isNull()) {
+        return;
+    }
+    if (QLabel *thumb = button->findChild<QLabel *>(QStringLiteral("VodThumb"))) {
+        const QSize targetSize = thumb->size().isValid() ? thumb->size() : QSize(214, 120);
+        thumb->setPixmap(pixmap.scaled(targetSize, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+        return;
+    }
+    button->setIcon(QIcon(pixmap.scaled(520, 292, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation)));
+}
+
 void MainWindow::requestVodThumbnail(const Vod &vod, QAbstractButton *button)
 {
     const QString youtubeId = vod.youtubeId.trimmed();
@@ -2689,7 +2816,7 @@ void MainWindow::requestVodThumbnail(const Vod &vod, QAbstractButton *button)
     const QString cacheKey = thumbnailCacheKey(vod, nowMs);
 
     if (m_thumbnailCache.contains(cacheKey)) {
-        button->setIcon(m_thumbnailCache.value(cacheKey));
+        applyVodThumbnailToCard(button, m_thumbnailCache.value(cacheKey).pixmap(520, 292));
         if (refresh) {
             scheduleVodThumbnailRefresh(vod, button);
         }
@@ -2702,7 +2829,7 @@ void MainWindow::requestVodThumbnail(const Vod &vod, QAbstractButton *button)
         const QString prefix = youtubeId + QStringLiteral("|fresh|");
         for (auto it = m_thumbnailCache.constBegin(); it != m_thumbnailCache.constEnd(); ++it) {
             if (it.key().startsWith(prefix) || it.key() == youtubeId) {
-                button->setIcon(it.value());
+                applyVodThumbnailToCard(button, it.value().pixmap(520, 292));
                 break;
             }
         }
@@ -2788,7 +2915,7 @@ void MainWindow::requestVodThumbnail(const Vod &vod, QAbstractButton *button)
         QIcon icon(pixmap.scaled(520, 292, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
         m_thumbnailCache.insert(cacheKey, icon);
         if (!target.isNull()) {
-            target->setIcon(icon);
+            applyVodThumbnailToCard(target, icon.pixmap(520, 292));
             if (refresh) {
                 scheduleVodThumbnailRefresh(vod, target);
             }
@@ -2848,6 +2975,14 @@ void MainWindow::applyProfileIcon(const QString &pictureUrl, const QIcon &icon)
         for (QToolButton *button : buttons) {
             if (button->property("profileUrl").toString() == pictureUrl) {
                 button->setIcon(icon);
+            }
+        }
+    }
+    if (m_vodGridWidget != nullptr) {
+        const auto avatars = m_vodGridWidget->findChildren<QLabel *>(QStringLiteral("cardAvatar"), Qt::FindChildrenRecursively);
+        for (QLabel *avatar : avatars) {
+            if (avatar->property("profileUrl").toString() == pictureUrl) {
+                avatar->setPixmap(icon.pixmap(24, 24));
             }
         }
     }

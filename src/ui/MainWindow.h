@@ -85,6 +85,7 @@ private:
     void clearVodViewer();
     void refreshStats();
     QWidget *createFriendRow(const AccountProfile &profile);
+    QVector<Vod> linkedFriendVodsForCard(const Vod &vod) const;
     void requestProfileIcon(const QString &pictureUrl);
     void requestVodThumbnail(const Vod &vod, QAbstractButton *button);
     void scheduleVodThumbnailRefresh(const Vod &vod, QAbstractButton *button);
