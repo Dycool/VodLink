@@ -2074,7 +2074,7 @@ void MainWindow::rebuildVodGrid()
             auto *avatarsLayout = new QHBoxLayout(avatars);
             avatarsLayout->setContentsMargins(0, 0, 0, 0);
             avatarsLayout->setSpacing(-6);
-            const int avatarCount = std::min(3, linkedFriends.size());
+            const int avatarCount = std::min<int>(3, static_cast<int>(linkedFriends.size()));
             for (int avatarIndex = 0; avatarIndex < avatarCount; ++avatarIndex) {
                 const Vod &friendVod = linkedFriends.at(avatarIndex);
                 const QString label = ownerText(friendVod);
