@@ -182,15 +182,20 @@ bool verifyDownload(const std::filesystem::path &setup)
 
 bool runSetup(const std::filesystem::path &setup)
 {
+    // /SILENT (unlike /VERYSILENT) keeps Inno's progress-bar window visible, so
+    // installs and updates are never an invisible background process.
     std::wstring command = L"\"" + setup.wstring()
-        + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /FORCECLOSEAPPLICATIONS /VODLINKUPDATE";
+        + L"\" /SILENT /SUPPRESSMSGBOXES /NORESTART /SP- /FORCECLOSEAPPLICATIONS /VODLINKUPDATE";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
+    // No CREATE_NO_WINDOW: the setup is a windowless GUI process already, and
+    // spawning dropped executables with a hidden window is a classic antivirus
+    // heuristic trigger.
     if (!CreateProcessW(setup.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, setup.parent_path().c_str(), &startup, &process)) {
+                        0, nullptr, setup.parent_path().c_str(), &startup, &process)) {
         return false;
     }
     WaitForSingleObject(process.hProcess, INFINITE);
@@ -215,7 +220,8 @@ InstallResult install(HWND window)
     }
     if (ok && window) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Installing VodLink"));
     if (ok && !runSetup(setup)) {
-        error = L"VodLink could not be installed.";
+        error = L"VodLink could not be installed. If your antivirus quarantined the "
+                L"installer, restore it or add an exclusion and try again.";
         ok = false;
     }
     if (ok && !writeInstalledCommit()) {
@@ -232,10 +238,18 @@ InstallResult install(HWND window)
 DWORD WINAPI installWorker(void *context)
 {
     auto *result = new InstallResult(install(static_cast<HWND>(context)));
-    if (result->ok
-        && !launch(installedApp(), gLaunchMinimized ? L"--minimized" : nullptr)) {
-        result->ok = false;
-        result->error = L"VodLink was installed, but could not be opened.";
+    const wchar_t *arguments = gLaunchMinimized ? L"--minimized" : nullptr;
+    std::error_code ignored;
+    if (result->ok) {
+        if (!launch(installedApp(), arguments)) {
+            result->ok = false;
+            result->error = L"VodLink was installed, but could not be opened.";
+        }
+    } else if (std::filesystem::is_regular_file(installedApp(), ignored)
+               && launch(installedApp(), arguments)) {
+        // Updating failed, but a working VodLink is already installed. Opening it
+        // beats showing an installer error for an app the user can still use.
+        result->ok = true;
     }
     PostMessageW(static_cast<HWND>(context), kInstallFinished, 0,
                  reinterpret_cast<LPARAM>(result));
@@ -363,7 +377,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
 {
     const std::wstring arguments(commandLine ? commandLine : L"");
-    const bool backgroundUpdate = arguments.find(L"--update-background") != std::wstring::npos;
+    // --update-background is still passed by older installed builds; installs
+    // and updates always show the installer window now, so it is ignored.
     const bool launchMinimized = arguments.find(L"--launch-minimized") != std::wstring::npos;
     gLaunchMinimized = launchMinimized;
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\VodLinkInstaller");
@@ -381,15 +396,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
         ReleaseMutex(mutex);
         CloseHandle(mutex);
         return result;
-    }
-
-    if (backgroundUpdate) {
-        const InstallResult installResult = install(nullptr);
-        const bool launched = installResult.ok
-            && launch(installedApp(), launchMinimized ? L"--minimized" : nullptr);
-        ReleaseMutex(mutex);
-        CloseHandle(mutex);
-        return launched ? 0 : 1;
     }
 
     WNDCLASSEXW windowClass{sizeof(windowClass)};

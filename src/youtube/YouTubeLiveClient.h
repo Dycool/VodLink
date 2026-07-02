@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -71,12 +72,15 @@ signals:
 private:
     using JsonHandler = std::function<void(const QJsonObject &)>;
 
+    // When onError is set, HTTP failures go to it (with the API "error" object)
+    // instead of emitting failed(); use it for best-effort background work that
+    // must never surface error dialogs or disturb the stream state machine.
     void get(const QString &path, const QUrlQuery &query,
-             JsonHandler onSuccess, bool retrying = false);
+             JsonHandler onSuccess, bool retrying = false, JsonHandler onError = {});
     void post(const QString &path, const QUrlQuery &query, const QJsonObject &body,
               JsonHandler onSuccess, bool retrying = false);
     void put(const QString &path, const QUrlQuery &query, const QJsonObject &body,
-             JsonHandler onSuccess, bool retrying = false);
+             JsonHandler onSuccess, bool retrying = false, JsonHandler onError = {});
     void deleteRequest(const QString &path, const QUrlQuery &query,
                        JsonHandler onSuccess, bool retrying = false,
                        JsonHandler onNotFound = {});
@@ -90,7 +94,7 @@ private:
     void fetchVideoDetails(const QStringList &videoIds, int offset,
                            const std::shared_ptr<QVector<Vod>> &vods,
                            const std::shared_ptr<QHash<QString, QVector<VodClip>>> &clipsByVod);
-    void updateVideoStatusForEmbedding(const QString &videoId, const QJsonObject &existingStatus);
+    void updateVideoStatusForEmbedding(const QString &videoId);
 
     QNetworkAccessManager m_network;
     GoogleAuth *m_auth = nullptr;
@@ -100,4 +104,9 @@ private:
     QString m_statusStreamId;
     QTimer m_statusPollTimer;
     bool m_statusProbeInFlight = false;
+    // Video IDs whose archive status was already confirmed embed-safe this run.
+    // Every videos.update costs 50 quota units of the 10,000/day budget, so
+    // re-checking on every viewer open can silently exhaust the quota and block
+    // broadcast creation ("streams stop working") for the rest of the day.
+    QSet<QString> m_embedVerifiedVideos;
 };

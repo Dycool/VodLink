@@ -280,12 +280,17 @@ static QJsonObject vodLinkSafeVideoStatus()
     };
 }
 
-static bool videoStatusMatchesVodLinkDefaults(const QJsonObject &status)
+static bool videoStatusAllowsEmbedding(const QJsonObject &status)
 {
-    return status.value(QStringLiteral("privacyStatus")).toString() == QStringLiteral("unlisted")
-           && status.value(QStringLiteral("embeddable")).toBool(true)
-           && !status.value(QStringLiteral("publicStatsViewable")).toBool(true)
-           && !status.value(QStringLiteral("selfDeclaredMadeForKids")).toBool(false);
+    // Only gate on what the in-app player actually needs: the archive must not
+    // be private and must stay embeddable. publicStatsViewable and
+    // selfDeclaredMadeForKids are still written as part of the safe defaults,
+    // but YouTube does not reliably echo them back for live archives; treating
+    // them as mismatches made every VOD open re-issue a 50-quota-unit
+    // videos.update forever.
+    const QString privacy = status.value(QStringLiteral("privacyStatus")).toString();
+    return (privacy == QStringLiteral("unlisted") || privacy == QStringLiteral("public"))
+           && status.value(QStringLiteral("embeddable")).toBool(true);
 }
 
 int youtubeQualityTierHeightForFrame(int width, int height)
@@ -504,7 +509,13 @@ void YouTubeLiveClient::prepareBroadcast(const QString &game)
              {QStringLiteral("enableAutoStop"), false},
              {QStringLiteral("enableDvr"), true},
              {QStringLiteral("recordFromStart"), true},
-             {QStringLiteral("enableEmbed"), true},
+             // Do NOT send enableEmbed here. YouTube rejects it with
+             // invalidEmbedSetting ("Embed setting invalid") for channels that
+             // are not allowed to embed live streams, which kills the whole
+             // broadcast insert and blocks streaming entirely. The in-app player
+             // only embeds the archived VOD, and archive embeddability is
+             // governed by video.status.embeddable (default true), which
+             // ensureVodEmbeddable() re-asserts after the stream ends.
              // Quality beats latency for VodLink: normal latency keeps the
              // largest viewer resolutions available, while low/ultra-low can
              // restrict smoothness and 4K availability. All linked VODs use the
@@ -730,7 +741,7 @@ void YouTubeLiveClient::ensureVodEmbeddable(const QString &videoId)
         return;
     }
     const QString trimmed = videoId.trimmed();
-    if (trimmed.isEmpty()) {
+    if (trimmed.isEmpty() || m_embedVerifiedVideos.contains(trimmed)) {
         return;
     }
 
@@ -742,27 +753,32 @@ void YouTubeLiveClient::ensureVodEmbeddable(const QString &videoId)
         if (items.isEmpty()) {
             return;
         }
-        updateVideoStatusForEmbedding(trimmed,
-                                      items.first().toObject().value(QStringLiteral("status")).toObject());
+        const QJsonObject status =
+            items.first().toObject().value(QStringLiteral("status")).toObject();
+        if (videoStatusAllowsEmbedding(status)) {
+            m_embedVerifiedVideos.insert(trimmed);
+            return;
+        }
+        updateVideoStatusForEmbedding(trimmed);
+    }, false, [](const QJsonObject &) {
+        // Best-effort background maintenance: stay quiet on failure. Emitting
+        // failed() here pops error dialogs and resets an in-flight stream setup.
     });
 }
 
-void YouTubeLiveClient::updateVideoStatusForEmbedding(const QString &videoId, const QJsonObject &existingStatus)
+void YouTubeLiveClient::updateVideoStatusForEmbedding(const QString &videoId)
 {
     const QString trimmed = videoId.trimmed();
     if (trimmed.isEmpty()) {
         return;
     }
 
-    if (videoStatusMatchesVodLinkDefaults(existingStatus)) {
-        return;
-    }
-
     // A freshly completed live archive can still be visible to the owner on
     // youtube.com while the anonymous embedded player sees it as private/not
-    // embeddable. Re-assert the safe VodLink defaults on the video resource too;
-    // liveBroadcast.contentDetails.enableEmbed alone is not reliable enough for
-    // the archived VOD. Keep this object to writable status fields only; copying
+    // embeddable. Re-assert the safe VodLink defaults on the video resource
+    // (broadcasts are created without enableEmbed, so the archive's own
+    // video.status.embeddable is the only switch that matters for the in-app
+    // player). Keep this object to writable status fields only; copying
     // YouTube's read-only status fields (uploadStatus, failureReason, etc.) makes
     // videos.update fail. Comments/live-chat/Clips switches are not writable via
     // Data API v3; publicStatsViewable=false is the supported privacy knob for
@@ -776,7 +792,13 @@ void YouTubeLiveClient::updateVideoStatusForEmbedding(const QString &videoId, co
         {QStringLiteral("status"), status}
     };
     put(QStringLiteral("videos"), updateQuery, body,
-        [this, trimmed](const QJsonObject &) { emit vodMetadataUpdated(trimmed); });
+        [this, trimmed](const QJsonObject &) {
+            m_embedVerifiedVideos.insert(trimmed);
+            emit vodMetadataUpdated(trimmed);
+        }, false, [](const QJsonObject &) {
+        // Quiet failure: a live-bound video can reject status writes until the
+        // archive is finalized; the next ensureVodEmbeddable() simply retries.
+        });
 }
 
 void YouTubeLiveClient::deleteVideo(const QString &videoId)
@@ -1050,7 +1072,7 @@ void YouTubeLiveClient::updateVodLinkMetadata(const Vod &vod, const QVector<VodC
 }
 
 void YouTubeLiveClient::get(const QString &path, const QUrlQuery &query,
-                            JsonHandler onSuccess, bool retrying)
+                            JsonHandler onSuccess, bool retrying, JsonHandler onError)
 {
     QUrl url(apiBase() + path);
     url.setQuery(query);
@@ -1060,7 +1082,8 @@ void YouTubeLiveClient::get(const QString &path, const QUrlQuery &query,
                          QByteArray("Bearer ") + (m_auth ? m_auth->accessToken().toUtf8() : QByteArray()));
     QNetworkReply *reply = m_network.get(request);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, path, query, handler = std::move(onSuccess), retrying]() mutable {
+            [this, reply, path, query, handler = std::move(onSuccess), retrying,
+             onError = std::move(onError)]() mutable {
         const QByteArray payload = reply->readAll();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         reply->deleteLater();
@@ -1068,9 +1091,9 @@ void YouTubeLiveClient::get(const QString &path, const QUrlQuery &query,
         if (status == 401 && !retrying && m_auth != nullptr && !m_auth->refreshToken().isEmpty()) {
             auto connection = std::make_shared<QMetaObject::Connection>();
             *connection = connect(m_auth, &GoogleAuth::tokensChanged, this,
-                                  [this, connection, path, query, handler]() mutable {
+                                  [this, connection, path, query, handler, onError]() mutable {
                                       disconnect(*connection);
-                                      get(path, query, std::move(handler), true);
+                                      get(path, query, std::move(handler), true, std::move(onError));
                                   });
             m_auth->refreshNow();
             return;
@@ -1079,6 +1102,10 @@ void YouTubeLiveClient::get(const QString &path, const QUrlQuery &query,
         const QJsonDocument document = QJsonDocument::fromJson(payload);
         if (status < 200 || status >= 300) {
             const QJsonObject apiError = document.object().value(QStringLiteral("error")).toObject();
+            if (onError) {
+                onError(apiError);
+                return;
+            }
             const QString message = apiError.value(QStringLiteral("message")).toString();
             emit failed(message.isEmpty()
                             ? QStringLiteral("YouTube request failed with HTTP %1.").arg(status)
@@ -1132,7 +1159,8 @@ void YouTubeLiveClient::post(const QString &path, const QUrlQuery &query,
 }
 
 void YouTubeLiveClient::put(const QString &path, const QUrlQuery &query,
-                            const QJsonObject &body, JsonHandler onSuccess, bool retrying)
+                            const QJsonObject &body, JsonHandler onSuccess, bool retrying,
+                            JsonHandler onError)
 {
     QUrl url(apiBase() + path);
     url.setQuery(query);
@@ -1146,7 +1174,8 @@ void YouTubeLiveClient::put(const QString &path, const QUrlQuery &query,
         QByteArrayLiteral("PUT"),
         QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, path, query, body, handler = std::move(onSuccess), retrying]() mutable {
+            [this, reply, path, query, body, handler = std::move(onSuccess), retrying,
+             onError = std::move(onError)]() mutable {
         const QByteArray payload = reply->readAll();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         reply->deleteLater();
@@ -1154,9 +1183,10 @@ void YouTubeLiveClient::put(const QString &path, const QUrlQuery &query,
         if (status == 401 && !retrying && m_auth != nullptr && !m_auth->refreshToken().isEmpty()) {
             auto connection = std::make_shared<QMetaObject::Connection>();
             *connection = connect(m_auth, &GoogleAuth::tokensChanged, this,
-                                  [this, connection, path, query, body, handler]() mutable {
+                                  [this, connection, path, query, body, handler, onError]() mutable {
                                       disconnect(*connection);
-                                      put(path, query, body, std::move(handler), true);
+                                      put(path, query, body, std::move(handler), true,
+                                          std::move(onError));
                                   });
             m_auth->refreshNow();
             return;
@@ -1165,6 +1195,10 @@ void YouTubeLiveClient::put(const QString &path, const QUrlQuery &query,
         const QJsonDocument document = QJsonDocument::fromJson(payload);
         if (status < 200 || status >= 300) {
             const QJsonObject apiError = document.object().value(QStringLiteral("error")).toObject();
+            if (onError) {
+                onError(apiError);
+                return;
+            }
             const QString message = apiError.value(QStringLiteral("message")).toString();
             emit failed(message.isEmpty()
                             ? QStringLiteral("YouTube update failed with HTTP %1.").arg(status)
