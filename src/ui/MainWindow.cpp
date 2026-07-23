@@ -848,6 +848,9 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
         reloadLibrary();
     });
     connect(m_controller, &AppController::statusChanged, this, &MainWindow::updateStatus);
+    connect(m_controller, &AppController::shutdownReady, qApp, [] {
+        QApplication::quit();
+    });
     connect(m_controller, &AppController::accountChanged, this, &MainWindow::onAccountChanged);
     connect(m_controller, &AppController::friendsChanged, this, &MainWindow::reloadFriends);
     connect(m_controller, &AppController::errorOccurred, this, [this](const QString &message) {
@@ -1949,10 +1952,13 @@ void MainWindow::requestAppQuit()
     m_quitRequested = true;
     const bool activeCleanup = m_controller != nullptr && m_controller->shutdownForQuit();
     hide();
-    // Give the just-created YouTube/Worker cleanup requests a short chance to hit
-    // the socket before the process exits. Normal stream finalization still runs
-    // asynchronously if the app remains open.
-    QTimer::singleShot(activeCleanup ? 1200 : 0, qApp, [] { QApplication::quit(); });
+    if (!activeCleanup) {
+        QApplication::quit();
+        return;
+    }
+    // Wait for the RTMP drain and YouTube completion response. Keep a bounded
+    // fallback so a network outage can never trap the process.
+    QTimer::singleShot(20000, qApp, [] { QApplication::quit(); });
 }
 
 void MainWindow::reloadLibrary()

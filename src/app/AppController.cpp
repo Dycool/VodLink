@@ -27,6 +27,7 @@ constexpr auto kBitrateSetting = "recorder_bitrate_kbps";
 constexpr auto kResolutionSetting = "recorder_resolution";
 constexpr auto kFpsSetting = "recorder_fps";
 constexpr auto kYouTubeLibraryLastSyncMsSetting = "youtube_library_last_sync_ms";
+constexpr int kYouTubeIngestDrainMs = 8000;
 
 QString normalizedPrivacyMode(QString value)
 {
@@ -207,6 +208,18 @@ QString friendlyYouTubeError(const QString &message)
 AppController::AppController(QObject *parent)
     : QObject(parent), m_detector(&m_catalog)
 {
+    m_broadcastCompletionTimer.setSingleShot(true);
+    connect(&m_broadcastCompletionTimer, &QTimer::timeout, this, [this] {
+        if (m_streamState != StreamState::Stopping || m_broadcastId.isEmpty()) {
+            return;
+        }
+        DebugLog::writeCategory(QStringLiteral("youtube"),
+                                QStringLiteral("RTMP drain complete; completing broadcast=%1")
+                                    .arg(m_broadcastId));
+        emit statusChanged(QStringLiteral("Finalizing YouTube VOD…"), true);
+        m_youtube.completeBroadcast(m_broadcastId);
+    });
+
     connect(this, &AppController::statusChanged, this, [](const QString &message, bool streaming) {
         DebugLog::writeCategory(QStringLiteral("status"),
                                 QStringLiteral("%1 | streaming=%2")
@@ -1072,13 +1085,15 @@ void AppController::onEncoderStopped()
         m_youtube.updateVodLinkMetadata(vod, {});
         m_youtube.ensureVodEmbeddable(vod.youtubeId);
     }
-    m_youtube.completeBroadcast(m_broadcastId);
-
     // Ask the Worker which friends streamed the same game during this session.
     finishFriendSessionIfNeeded();
 
     m_streamState = StreamState::Stopping;
-    emit statusChanged(QStringLiteral("Finalizing YouTube VOD…"), true);
+    // OBS has closed the RTMP socket gracefully, but YouTube's ingest edge can
+    // still have the final GOP/audio packets buffered. Completing the broadcast
+    // immediately races that buffer and can truncate the archive's last seconds.
+    m_broadcastCompletionTimer.start(kYouTubeIngestDrainMs);
+    emit statusChanged(QStringLiteral("Saving the final seconds to YouTube…"), true);
 }
 
 bool AppController::finishActiveStreamBeforeAccountDisconnect(const QString &statusMessage)
@@ -1299,6 +1314,7 @@ void AppController::resetStreamState()
                                 .arg(static_cast<int>(m_streamState))
                                 .arg(m_broadcastId, m_streamId, m_currentGame));
     m_youtube.stopStreamStatusPolling(m_broadcastId, m_streamId);
+    m_broadcastCompletionTimer.stop();
     m_streamState = StreamState::Idle;
     m_cancelRequested = false;
     m_encoderStarted = false;
@@ -1312,6 +1328,9 @@ void AppController::resetStreamState()
     m_currentGameDefinition = {};
     m_startedAt = {};
     emit statusChanged(QStringLiteral("Watching for games"), false);
+    if (m_shutdownStarted) {
+        emit shutdownReady();
+    }
 }
 
 void AppController::announceFriendSessionIfReady()

@@ -12,6 +12,7 @@
 #include <QHash>
 #include <QObject>
 #include <QStringList>
+#include <QTimer>
 
 class AppController final : public QObject
 {
@@ -103,6 +104,8 @@ signals:
     void shareEnabledChanged(bool enabled);
     void autoRecordEnabledChanged(bool enabled);
     void lastGameChanged(const QString &game);
+    // Emitted once all active RTMP/YouTube cleanup has finished during app quit.
+    void shutdownReady();
     // Emitted once after sign-in when YouTube live streaming is not available on
     // the account; carries a user-facing explanation.
     void streamingUnavailable(const QString &explanation);
@@ -153,6 +156,7 @@ private:
     QString m_lastYouTubeWaitDetail;
     QString m_lastLocalStreamDetail;
     QDateTime m_startedAt;
+    QTimer m_broadcastCompletionTimer;
     StreamState m_streamState = StreamState::Idle;
     bool m_cancelRequested = false;
     bool m_encoderStarted = false;
