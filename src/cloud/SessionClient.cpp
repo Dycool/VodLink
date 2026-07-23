@@ -88,8 +88,12 @@ void SessionClient::requestStopMatches()
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError || status < 200 || status >= 300) {
-            emit requestFailed(QStringLiteral("Could not fetch friends' VODs: %1")
-                                   .arg(QString::fromUtf8(payload)));
+            // On transport-level failures the body is empty; fall back to the
+            // network error text so the dialog is not blank.
+            const QString detail = payload.trimmed().isEmpty()
+                                       ? reply->errorString()
+                                       : QString::fromUtf8(payload);
+            emit requestFailed(QStringLiteral("Could not fetch friends' VODs: %1").arg(detail));
             return;
         }
 

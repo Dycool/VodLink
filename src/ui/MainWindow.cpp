@@ -1086,7 +1086,26 @@ QWidget *MainWindow::buildRestorePage()
     auto *subtitle = mutedLabel(QStringLiteral("VodLink found saved credentials and is signing you back in. If this fails, you can reset local data from Settings or sign in again."));
     subtitle->setAlignment(Qt::AlignCenter);
     layout->addWidget(subtitle);
+
+    // Escape hatch: a revoked/expired refresh token would otherwise strand the
+    // user on this page forever (it has no other controls, and Settings is not
+    // reachable until sign-in completes).
+    layout->addSpacing(12);
+    auto *buttonRow = new QHBoxLayout;
+    buttonRow->addStretch();
+    auto *signInAgain = new QPushButton(QStringLiteral("Sign in with a different account"));
+    signInAgain->setObjectName(QStringLiteral("GhostButton"));
+    signInAgain->setCursor(Qt::PointingHandCursor);
+    signInAgain->setMinimumSize(260, 42);
+    buttonRow->addWidget(signInAgain);
+    buttonRow->addStretch();
+    layout->addLayout(buttonRow);
     layout->addStretch();
+
+    connect(signInAgain, &QPushButton::clicked, this, [this] {
+        // Drops the stored refresh token and flips the auth gate to the sign-in page.
+        m_controller->signOut();
+    });
 
     outerLayout->addWidget(shell, 1);
     return page;
@@ -1926,7 +1945,6 @@ void MainWindow::requestAppQuit()
 void MainWindow::reloadLibrary()
 {
     QString error;
-    const QString selectedGame = m_libraryGameFilter->currentIndex() <= 0 ? QString() : m_libraryGameFilter->currentText();
     const QString previous = m_libraryGameFilter->currentText();
     const QStringList games = m_controller->games(&error);
     if (!error.isEmpty()) {
@@ -1943,6 +1961,10 @@ void MainWindow::reloadLibrary()
     m_libraryGameFilter->setCurrentIndex(index < 0 ? 0 : index);
     m_libraryGameFilter->blockSignals(false);
 
+    // Read the filter only after the combo has been rebuilt: if the previous
+    // selection vanished from the library, the combo falls back to "Game: All"
+    // and the query must match what the user now sees.
+    const QString selectedGame = m_libraryGameFilter->currentIndex() <= 0 ? QString() : m_libraryGameFilter->currentText();
     m_libraryVods = m_controller->libraryVods(selectedGame, &error);
     if (!error.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("Library error"), error);
@@ -2485,7 +2507,11 @@ void MainWindow::refreshStats()
     }
     qint64 totalMs = 0;
     for (const Vod &vod : m_libraryVods) {
-        totalMs += std::max<qint64>(0, vod.durationMs);
+        // Friends' recordings cover the same wall-clock sessions as the user's
+        // own VODs; adding them would double-count game time.
+        if (vod.isMine()) {
+            totalMs += std::max<qint64>(0, vod.durationMs);
+        }
     }
     const qint64 hours = totalMs / (1000 * 60 * 60);
     const qint64 minutes = (totalMs / (1000 * 60)) % 60;

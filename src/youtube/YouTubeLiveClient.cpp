@@ -30,12 +30,13 @@ QString apiBase()
 
 QString htmlDecode(QString text)
 {
+    // Decode &amp; last, otherwise "&amp;lt;" double-decodes into "<".
     return text.replace(QStringLiteral("&quot;"), QStringLiteral("\""))
         .replace(QStringLiteral("&#34;"), QStringLiteral("\""))
-        .replace(QStringLiteral("&amp;"), QStringLiteral("&"))
         .replace(QStringLiteral("&#39;"), QStringLiteral("'"))
         .replace(QStringLiteral("&lt;"), QStringLiteral("<"))
-        .replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+        .replace(QStringLiteral("&gt;"), QStringLiteral(">"))
+        .replace(QStringLiteral("&amp;"), QStringLiteral("&"));
 }
 
 QString firstCapture(const QString &text, const QString &pattern)
@@ -83,16 +84,17 @@ QString canonicalClipUrl(const QString &clipId, const QString &fallbackUrl)
 qint64 isoDurationMs(const QString &duration)
 {
     // Handles the YouTube ISO-8601 subset used by contentDetails.duration, e.g.
-    // PT1H02M03S, PT4M10S, PT42S.
-    const QRegularExpression re(QStringLiteral("^P(?:\\d+D)?T(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?$"));
+    // P1DT2H03M04S, PT1H02M03S, PT4M10S, PT42S, P0D (live/premiere placeholders).
+    const QRegularExpression re(QStringLiteral("^P(?:(\\d+)D)?(?:T(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?)?$"));
     const auto match = re.match(duration.trimmed());
     if (!match.hasMatch()) {
         return 0;
     }
-    const int hours = match.captured(1).isEmpty() ? 0 : match.captured(1).toInt();
-    const int minutes = match.captured(2).isEmpty() ? 0 : match.captured(2).toInt();
-    const int seconds = match.captured(3).isEmpty() ? 0 : match.captured(3).toInt();
-    return qint64((hours * 3600) + (minutes * 60) + seconds) * 1000;
+    const qint64 days = match.captured(1).isEmpty() ? 0 : match.captured(1).toLongLong();
+    const qint64 hours = match.captured(2).isEmpty() ? 0 : match.captured(2).toLongLong();
+    const qint64 minutes = match.captured(3).isEmpty() ? 0 : match.captured(3).toLongLong();
+    const qint64 seconds = match.captured(4).isEmpty() ? 0 : match.captured(4).toLongLong();
+    return (((days * 24 + hours) * 3600) + (minutes * 60) + seconds) * 1000;
 }
 
 QJsonObject vodLinkMetadataFromDescription(const QString &description)

@@ -20,6 +20,7 @@ class SyncPlayer final : public QWidget
 
 public:
     explicit SyncPlayer(QWidget *parent = nullptr);
+    ~SyncPlayer() override;
 
     // The synced set, sorted by start time. Pass the whole connected component of
     // overlapping VODs for one game. Does not start playback.

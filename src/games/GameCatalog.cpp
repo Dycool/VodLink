@@ -82,7 +82,16 @@ QString GameCatalog::identify(const QString &executableLower, const QString &ful
     if (!fullPath.isEmpty()) {
         for (auto it = m_user.constBegin(); it != m_user.constEnd(); ++it) {
             const QString key = it.key().trimmed().toLower();
-            if (key.size() >= 4 && fullPath.startsWith(key + QLatin1Char('/'))) {
+            // Full-path entries store the exact executable the user picked.
+            // Treat that executable's folder as the game's install root so the
+            // real game binary still matches when the user added a launcher
+            // (same approach as installed-library folder matching).
+            const int slash = key.lastIndexOf(QLatin1Char('/'));
+            if (slash < 4) {
+                continue; // basenames and root-level paths cannot prefix-match
+            }
+            const QString installDir = key.left(slash);
+            if (fullPath != key && fullPath.startsWith(installDir + QLatin1Char('/'))) {
                 return it.value();
             }
         }

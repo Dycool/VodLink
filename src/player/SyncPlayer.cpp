@@ -154,6 +154,16 @@ SyncPlayer::SyncPlayer(QWidget *parent)
     }
 }
 
+SyncPlayer::~SyncPlayer()
+{
+    // m_profile was created before m_view, so default QObject child destruction
+    // would tear the profile down while the page (a child of the view) still
+    // uses it — Qt WebEngine warns and can crash on exit. Destroy the view (and
+    // with it the page) first; the profile then dies safely as a child.
+    delete m_view;
+    m_view = nullptr;
+}
+
 void SyncPlayer::setGroup(const QVector<Vod> &vods)
 {
     m_group = vods;

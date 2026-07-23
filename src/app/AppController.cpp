@@ -1110,7 +1110,15 @@ void AppController::adoptSignedInAccount(const QString &email)
     if (!previous.isEmpty() && previous != normalized) {
         m_librarySyncStarted = false;
         m_pendingClipVodByVideoId.clear();
-        emit statusChanged(QStringLiteral("Switched Google account — keeping cached VODs. Use Settings to sync YouTube VODs when needed."), false);
+        // The friend list and matched friend VODs belong to the account that
+        // added them. Leaving them in place would make the new account announce
+        // sessions with the previous account's friends and show their VODs.
+        QString error;
+        if (!m_repository.clearAccountData(&error)) {
+            emit errorOccurred(QStringLiteral("Could not clear the previous account's friend data: %1").arg(error));
+        }
+        emit friendsChanged();
+        emit statusChanged(QStringLiteral("Switched Google account — cleared the previous account's friends and kept cached VODs. Use Settings to sync YouTube VODs when needed."), false);
         emit libraryChanged();
     }
 
@@ -1205,7 +1213,9 @@ void AppController::onClipImported(const VodClip &clip)
         return;
     }
 
-    Vod vod = m_pendingClipVodByVideoId.value(videoId);
+    // take() rather than value(): a finished import (success or failure below)
+    // must not leave a stale pending entry that later imports are matched against.
+    Vod vod = m_pendingClipVodByVideoId.take(videoId);
     if (vod.youtubeId.isEmpty()) {
         vod = ownVodByYoutubeId(videoId);
     }

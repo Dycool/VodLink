@@ -66,21 +66,81 @@ std::filesystem::path installedCommitMarker()
     return installedApp().parent_path() / L".vodlink-build-commit";
 }
 
+// Reads the installed commit marker tolerantly. The canonical format is plain
+// ASCII with no newline (what CI ships inside the setup payload and what
+// writeInstalledCommit() produces), but this must also accept markers touched
+// by other tools: UTF-8/UTF-16 BOMs, trailing CRLF, stray whitespace. A false
+// negative here silently reinstalls on every launch, which is far worse than
+// being lenient about whitespace/encoding around a hex commit string.
+std::wstring readInstalledCommit()
+{
+    std::ifstream input(installedCommitMarker(), std::ios::binary);
+    if (!input) {
+        return {};
+    }
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+
+    std::wstring text;
+    if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF
+        && static_cast<unsigned char>(bytes[1]) == 0xFE) {
+        // UTF-16 LE with BOM (e.g. Windows PowerShell's default Set-Content).
+        for (std::size_t i = 2; i + 1 < bytes.size(); i += 2) {
+            text.push_back(static_cast<wchar_t>(
+                static_cast<unsigned char>(bytes[i])
+                | (static_cast<unsigned char>(bytes[i + 1]) << 8)));
+        }
+    } else {
+        std::size_t start = 0;
+        if (bytes.size() >= 3 && static_cast<unsigned char>(bytes[0]) == 0xEF
+            && static_cast<unsigned char>(bytes[1]) == 0xBB
+            && static_cast<unsigned char>(bytes[2]) == 0xBF) {
+            start = 3; // UTF-8 BOM
+        }
+        for (std::size_t i = start; i < bytes.size(); ++i) {
+            text.push_back(static_cast<wchar_t>(static_cast<unsigned char>(bytes[i])));
+        }
+    }
+
+    // Keep only the first line, then trim whitespace/NULs from both ends.
+    const std::size_t lineEnd = text.find_first_of(L"\r\n");
+    if (lineEnd != std::wstring::npos) {
+        text.resize(lineEnd);
+    }
+    const auto isJunk = [](wchar_t c) {
+        return c == L' ' || c == L'\t' || c == L'\0';
+    };
+    while (!text.empty() && isJunk(text.back())) {
+        text.pop_back();
+    }
+    while (!text.empty() && isJunk(text.front())) {
+        text.erase(text.begin());
+    }
+    return text;
+}
+
 bool installedCommitMatches()
 {
-    std::wifstream input(installedCommitMarker());
-    std::wstring commit;
-    if (!std::getline(input, commit)) {
-        return false;
-    }
-    return commit == kBuildCommit;
+    const std::wstring commit = readInstalledCommit();
+    return !commit.empty() && _wcsicmp(commit.c_str(), kBuildCommit) == 0;
 }
 
 bool writeInstalledCommit()
 {
-    std::wofstream output(installedCommitMarker(), std::ios::trunc);
-    output << kBuildCommit;
-    return output.good();
+    {
+        // Canonical marker format: plain ASCII bytes, no BOM, no newline —
+        // identical to the .vodlink-build-commit CI ships inside the payload.
+        std::ofstream output(installedCommitMarker(), std::ios::binary | std::ios::trunc);
+        for (const wchar_t *c = kBuildCommit; *c != L'\0'; ++c) {
+            output.put(static_cast<char>(*c));
+        }
+        if (!output.good()) {
+            return false;
+        }
+    }
+    // Verify through the exact reader the next launch will use, so a completed
+    // install provably leaves a marker that short-circuits future runs.
+    return installedCommitMatches();
 }
 
 bool launch(const std::filesystem::path &path, const wchar_t *arguments = nullptr)
@@ -224,9 +284,12 @@ InstallResult install(HWND window)
                 L"installer, restore it or add an exclusion and try again.";
         ok = false;
     }
-    if (ok && !writeInstalledCommit()) {
-        error = L"VodLink was installed, but its build marker could not be written.";
-        ok = false;
+    if (ok && !installedCommitMatches()) {
+        // The setup payload ships .vodlink-build-commit itself; this write is a
+        // backfill for older/partial payloads. A marker problem must never fail
+        // an install that succeeded — the app works either way, and the only
+        // cost of a bad marker is one redundant reinstall on the next launch.
+        writeInstalledCommit();
     }
     if (ok && window) PostMessageW(window, kInstallStatus, 0, reinterpret_cast<LPARAM>(L"Opening VodLink"));
 
@@ -391,7 +454,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int)
         return 0;
     }
     const auto app = installedApp();
-    if (std::filesystem::is_regular_file(app) && installedCommitMatches()) {
+    std::error_code appCheck;
+    if (std::filesystem::is_regular_file(app, appCheck) && installedCommitMatches()) {
         const int result = launch(app, launchMinimized ? L"--minimized" : nullptr) ? 0 : 1;
         ReleaseMutex(mutex);
         CloseHandle(mutex);
