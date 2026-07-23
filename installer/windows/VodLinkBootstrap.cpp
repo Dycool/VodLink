@@ -206,7 +206,7 @@ std::string sha256(const std::filesystem::path &path)
     }
 
     std::ifstream input(path, std::ios::binary);
-    std::array<char, 1024 * 1024> buffer{};
+    std::vector<char> buffer(1024 * 1024);
     while (input.good()) {
         input.read(buffer.data(), buffer.size());
         const auto count = input.gcount();
@@ -242,10 +242,8 @@ bool verifyDownload(const std::filesystem::path &setup)
 
 bool runSetup(const std::filesystem::path &setup)
 {
-    // /SILENT (unlike /VERYSILENT) keeps Inno's progress-bar window visible, so
-    // installs and updates are never an invisible background process.
     std::wstring command = L"\"" + setup.wstring()
-        + L"\" /SILENT /SUPPRESSMSGBOXES /NORESTART /SP- /FORCECLOSEAPPLICATIONS /VODLINKUPDATE";
+        + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /FORCECLOSEAPPLICATIONS /VODLINKUPDATE";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
