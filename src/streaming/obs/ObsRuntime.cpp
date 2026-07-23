@@ -483,6 +483,11 @@ bool ObsRuntime::extractNativeWindowsRuntime(QString *error)
     QFile stamp(stampPath);
     if (stamp.open(QIODevice::ReadOnly)) {
         runtimeMatchesStamp = stamp.readAll() == manifest;
+        // Windows does not allow removeRecursively() to delete this file while
+        // our QFile handle is still open. Close it before replacing a stale
+        // runtime; otherwise the update removes everything except the manifest
+        // and startup fails every time the embedded runtime changes.
+        stamp.close();
     }
     if (!runtimeMatchesStamp && QDir(m_rootPath).exists()) {
         QDir oldRuntime(m_rootPath);
