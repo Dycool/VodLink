@@ -197,6 +197,7 @@ Vod vodFromVideoResource(const QJsonObject &item)
     const QJsonObject snippet = item.value(QStringLiteral("snippet")).toObject();
     const QJsonObject contentDetails = item.value(QStringLiteral("contentDetails")).toObject();
     const QJsonObject status = item.value(QStringLiteral("status")).toObject();
+    const QJsonObject processingDetails = item.value(QStringLiteral("processingDetails")).toObject();
     const QString description = snippet.value(QStringLiteral("description")).toString();
     const QJsonObject meta = vodLinkMetadataFromDescription(description);
     const QString title = snippet.value(QStringLiteral("title")).toString();
@@ -208,7 +209,22 @@ Vod vodFromVideoResource(const QJsonObject &item)
     if (vod.game.trimmed().isEmpty()) {
         vod.game = gameFromTitle(title);
     }
-    vod.streamStatus = status.value(QStringLiteral("uploadStatus")).toString(QStringLiteral("processed"));
+    const QString uploadStatus = status.value(QStringLiteral("uploadStatus")).toString().toLower();
+    const QString processingStatus =
+        processingDetails.value(QStringLiteral("processingStatus")).toString().toLower();
+    if (uploadStatus == QStringLiteral("failed") || uploadStatus == QStringLiteral("rejected")
+        || uploadStatus == QStringLiteral("deleted")) {
+        vod.streamStatus = uploadStatus;
+    } else if (processingStatus == QStringLiteral("processing")) {
+        vod.streamStatus = QStringLiteral("processing");
+    } else if (processingStatus == QStringLiteral("failed")) {
+        vod.streamStatus = QStringLiteral("failed");
+    } else {
+        // processingDetails.processingStatus is YouTube's authoritative readiness
+        // signal. Live archives may keep status.uploadStatus="uploaded" even
+        // after processing has succeeded and the watch/embed player is usable.
+        vod.streamStatus = QStringLiteral("processed");
+    }
     vod.startedAt = QDateTime::fromString(meta.value(QStringLiteral("startedAt")).toString(), Qt::ISODateWithMs);
     if (!vod.startedAt.isValid()) {
         vod.startedAt = QDateTime::fromString(snippet.value(QStringLiteral("publishedAt")).toString(), Qt::ISODate);
@@ -814,7 +830,8 @@ void YouTubeLiveClient::refreshVodStatus(const QString &videoId)
     }
 
     QUrlQuery query;
-    query.addQueryItem(QStringLiteral("part"), QStringLiteral("snippet,contentDetails,status"));
+    query.addQueryItem(QStringLiteral("part"),
+                       QStringLiteral("snippet,contentDetails,status,processingDetails"));
     query.addQueryItem(QStringLiteral("id"), trimmed);
     get(QStringLiteral("videos"), query, [this, trimmed](const QJsonObject &response) {
         const QJsonArray items = response.value(QStringLiteral("items")).toArray();
@@ -935,7 +952,8 @@ void YouTubeLiveClient::fetchVideoDetails(const QStringList &videoIds, int offse
 
     const QStringList batch = videoIds.mid(offset, 50);
     QUrlQuery query;
-    query.addQueryItem(QStringLiteral("part"), QStringLiteral("snippet,contentDetails,status"));
+    query.addQueryItem(QStringLiteral("part"),
+                       QStringLiteral("snippet,contentDetails,status,processingDetails"));
     query.addQueryItem(QStringLiteral("id"), batch.join(QLatin1Char(',')));
     get(QStringLiteral("videos"), query, [this, videoIds, offset, vods, clipsByVod](const QJsonObject &response) {
         const QJsonArray items = response.value(QStringLiteral("items")).toArray();
