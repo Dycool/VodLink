@@ -47,6 +47,7 @@ public:
     [[nodiscard]] bool canDeleteVod(const Vod &vod) const;
     [[nodiscard]] bool canAttachClipsToVod(const Vod &vod) const;
     void ensureVodEmbeddable(const Vod &vod);
+    void refreshVodStatus(const Vod &vod);
 
     // Friends (local list; mutuality resolved by the Worker).
     [[nodiscard]] QStringList friends(QString *error) const;

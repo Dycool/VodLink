@@ -92,6 +92,19 @@ constexpr auto kPrivacyDesktop = "desktop";
 constexpr auto kPrivacyFullDesktop = "full_desktop";
 constexpr auto kStartupRunValue = "VodLink";
 
+bool vodIsProcessing(const Vod &vod)
+{
+    const QString status = vod.streamStatus.trimmed().toLower();
+    return status == QStringLiteral("processing") || status == QStringLiteral("uploaded");
+}
+
+bool vodProcessingFailed(const Vod &vod)
+{
+    const QString status = vod.streamStatus.trimmed().toLower();
+    return status == QStringLiteral("failed") || status == QStringLiteral("rejected")
+           || status == QStringLiteral("deleted");
+}
+
 QString quotedStartupCommand()
 {
     const QString executable = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
@@ -1944,6 +1957,10 @@ void MainWindow::requestAppQuit()
 
 void MainWindow::reloadLibrary()
 {
+    const QString activeViewerId = m_hasViewerVod ? m_viewerVod.youtubeId : QString();
+    const bool activeViewerWasPending = m_hasViewerVod && vodIsProcessing(m_viewerVod);
+    const bool activeViewerWasFailed = m_hasViewerVod && vodProcessingFailed(m_viewerVod);
+
     QString error;
     const QString previous = m_libraryGameFilter->currentText();
     const QStringList games = m_controller->games(&error);
@@ -1971,6 +1988,30 @@ void MainWindow::reloadLibrary()
         return;
     }
     applyVodFilters();
+
+    if (!activeViewerId.trimmed().isEmpty()) {
+        const auto refreshedIt = std::find_if(m_libraryVods.cbegin(), m_libraryVods.cend(),
+                                              [&activeViewerId](const Vod &vod) {
+                                                  return vod.youtubeId == activeViewerId;
+                                              });
+        if (refreshedIt != m_libraryVods.cend()) {
+            const Vod refreshedVod = *refreshedIt;
+            const bool stateChanged = activeViewerWasPending != vodIsProcessing(refreshedVod)
+                                      || activeViewerWasFailed != vodProcessingFailed(refreshedVod);
+            if (stateChanged) {
+                int row = -1;
+                for (int i = 0; i < m_filteredVods.size(); ++i) {
+                    if (m_filteredVods.at(i).youtubeId == activeViewerId) {
+                        row = i;
+                        break;
+                    }
+                }
+                showVodInViewerAt(refreshedVod, row, m_viewerStartSeconds);
+            } else {
+                m_viewerVod = refreshedVod;
+            }
+        }
+    }
     refreshStats();
 }
 
@@ -2229,10 +2270,11 @@ void MainWindow::showVodInViewer(const Vod &vod, int selectedGridRow)
 
 void MainWindow::showVodInViewerAt(const Vod &vod, int selectedGridRow, double startSeconds)
 {
+    ++m_processingVodPollGeneration;
+    m_processingVodPollAttempt = 0;
     m_hasViewerVod = true;
     m_viewerVod = vod;
     m_selectedVodRow = selectedGridRow;
-    m_controller->ensureVodEmbeddable(vod);
     if (m_viewerPanel != nullptr) {
         const bool wasHidden = !m_viewerPanel->isVisible();
         m_viewerPanel->show();
@@ -2275,8 +2317,76 @@ void MainWindow::showVodInViewerAt(const Vod &vod, int selectedGridRow, double s
                                      ? clampVodOffset(vod, startSeconds)
                                      : 0.0;
     m_viewerStartSeconds = selectedStart;
+
+    if (vodIsProcessing(vod)) {
+        showProcessingVodState(vod);
+        updateVodCardSelection();
+        return;
+    }
+    if (vodProcessingFailed(vod)) {
+        if (m_syncPlayer != nullptr) {
+            m_syncPlayer->clear();
+            m_syncPlayer->showMessage(
+                QStringLiteral("YouTube could not process this VOD (status: %1).")
+                    .arg(vod.streamStatus.trimmed()));
+        }
+        if (m_participantStrip != nullptr) {
+            m_participantStrip->hide();
+        }
+        updateVodCardSelection();
+        return;
+    }
+
+    m_controller->ensureVodEmbeddable(vod);
     rebuildParticipantVodStrip(vod);
     updateVodCardSelection();
+}
+
+void MainWindow::showProcessingVodState(const Vod &vod)
+{
+    if (m_syncPlayer != nullptr) {
+        m_syncPlayer->clear();
+        m_syncPlayer->showMessage(QStringLiteral(
+            "YouTube is still processing this VOD. Playback will start automatically when it is ready."));
+    }
+    if (m_participantLayout != nullptr) {
+        while (QLayoutItem *item = m_participantLayout->takeAt(0)) {
+            if (QWidget *widget = item->widget()) {
+                widget->deleteLater();
+            }
+            delete item;
+        }
+    }
+    if (m_participantStrip != nullptr) {
+        m_participantStrip->hide();
+    }
+
+    m_controller->refreshVodStatus(vod);
+    scheduleProcessingVodRefresh();
+}
+
+void MainWindow::scheduleProcessingVodRefresh()
+{
+    if (!m_hasViewerVod || !vodIsProcessing(m_viewerVod)) {
+        return;
+    }
+
+    static constexpr int delaysMs[] = {8000, 15000, 30000, 60000};
+    const int delayIndex = std::min(m_processingVodPollAttempt,
+                                    static_cast<int>(std::size(delaysMs)) - 1);
+    const int delayMs = delaysMs[delayIndex];
+    ++m_processingVodPollAttempt;
+    const int generation = m_processingVodPollGeneration;
+    const QString videoId = m_viewerVod.youtubeId;
+
+    QTimer::singleShot(delayMs, this, [this, generation, videoId] {
+        if (generation != m_processingVodPollGeneration || !m_hasViewerVod
+            || m_viewerVod.youtubeId != videoId || !vodIsProcessing(m_viewerVod)) {
+            return;
+        }
+        m_controller->refreshVodStatus(m_viewerVod);
+        scheduleProcessingVodRefresh();
+    });
 }
 
 double MainWindow::syncedOffsetForLinkedVod(const Vod &sourceVod, const Vod &targetVod,
@@ -2414,6 +2524,8 @@ void MainWindow::rebuildParticipantVodStrip(const Vod &vod)
 
 void MainWindow::clearVodViewer()
 {
+    ++m_processingVodPollGeneration;
+    m_processingVodPollAttempt = 0;
     m_hasViewerVod = false;
     m_selectedVodRow = -1;
     m_viewerStartSeconds = 0.0;

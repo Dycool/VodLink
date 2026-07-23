@@ -38,6 +38,7 @@ public:
     [[nodiscard]] int currentIndex() const { return m_current; }
     [[nodiscard]] double currentTimeSeconds() const { return m_currentTime; }
     void clear();
+    void showMessage(const QString &message);
 
 signals:
     void currentChanged(int index);

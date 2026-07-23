@@ -35,6 +35,7 @@ public:
     void stopStreamStatusPolling(const QString &broadcastId = {}, const QString &streamId = {});
     void completeBroadcast(const QString &broadcastId);
     void ensureVodEmbeddable(const QString &videoId);
+    void refreshVodStatus(const QString &videoId);
     void deleteVideo(const QString &videoId);
 
     // YouTube is the source of truth. This imports all VodLink-marked videos from
@@ -68,6 +69,7 @@ signals:
                           const QHash<QString, QVector<VodClip>> &clipsByVod);
     void clipImported(const VodClip &clip);
     void vodMetadataUpdated(const QString &videoId);
+    void vodStatusRefreshed(const Vod &vod);
 
 private:
     using JsonHandler = std::function<void(const QJsonObject &)>;

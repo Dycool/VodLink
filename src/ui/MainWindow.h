@@ -80,6 +80,8 @@ private:
     void selectVod(int row);
     void showVodInViewer(const Vod &vod, int selectedGridRow);
     void showVodInViewerAt(const Vod &vod, int selectedGridRow, double startSeconds);
+    void showProcessingVodState(const Vod &vod);
+    void scheduleProcessingVodRefresh();
     void rebuildParticipantVodStrip(const Vod &vod);
     double syncedOffsetForLinkedVod(const Vod &sourceVod, const Vod &targetVod, double sourceOffsetSeconds) const;
     void clearVodViewer();
@@ -161,4 +163,6 @@ private:
     QHash<QString, int> m_thumbnailUnchangedCounts;
     QHash<QString, qint64> m_thumbnailNextProbeMs;
     double m_viewerStartSeconds = 0.0;
+    int m_processingVodPollGeneration = 0;
+    int m_processingVodPollAttempt = 0;
 };

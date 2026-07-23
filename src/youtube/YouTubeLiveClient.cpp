@@ -803,6 +803,35 @@ void YouTubeLiveClient::updateVideoStatusForEmbedding(const QString &videoId)
         });
 }
 
+void YouTubeLiveClient::refreshVodStatus(const QString &videoId)
+{
+    if (!isAuthenticated()) {
+        return;
+    }
+    const QString trimmed = videoId.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("part"), QStringLiteral("snippet,contentDetails,status"));
+    query.addQueryItem(QStringLiteral("id"), trimmed);
+    get(QStringLiteral("videos"), query, [this, trimmed](const QJsonObject &response) {
+        const QJsonArray items = response.value(QStringLiteral("items")).toArray();
+        if (items.isEmpty()) {
+            return;
+        }
+        Vod vod = vodFromVideoResource(items.first().toObject());
+        if (vod.youtubeId.isEmpty()) {
+            vod.youtubeId = trimmed;
+        }
+        emit vodStatusRefreshed(vod);
+    }, false, [](const QJsonObject &) {
+        // Best-effort viewer refresh. A temporary API failure should leave the
+        // processing message visible and let the next backoff attempt retry.
+    });
+}
+
 void YouTubeLiveClient::deleteVideo(const QString &videoId)
 {
     if (!isAuthenticated()) {

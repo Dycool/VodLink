@@ -280,6 +280,24 @@ AppController::AppController(QObject *parent)
     connect(&m_youtube, &YouTubeLiveClient::vodMetadataUpdated, this, [this](const QString &) {
         emit statusChanged(QStringLiteral("Synced VOD metadata to YouTube"), false);
     });
+    connect(&m_youtube, &YouTubeLiveClient::vodStatusRefreshed, this, [this](Vod vod) {
+        const QString status = vod.streamStatus.trimmed().toLower();
+        vod.accountEmail = normalizedEmail(m_auth.email());
+        QString error;
+        if (!m_repository.upsertOwnVod(vod, &error)) {
+            DebugLog::writeCategory(QStringLiteral("youtube"),
+                                    QStringLiteral("VOD status refresh save failed id=%1 error=%2")
+                                        .arg(vod.youtubeId, error));
+            return;
+        }
+        DebugLog::writeCategory(QStringLiteral("youtube"),
+                                QStringLiteral("VOD status refreshed id=%1 status=%2")
+                                    .arg(vod.youtubeId, status));
+        if (status == QStringLiteral("processed")) {
+            m_youtube.ensureVodEmbeddable(vod.youtubeId);
+        }
+        emit libraryChanged();
+    });
     connect(&m_youtube, &YouTubeLiveClient::streamingUnavailable, this,
             [this](const QString &reason, const QString &message) {
         QString explanation;
@@ -579,6 +597,14 @@ void AppController::ensureVodEmbeddable(const Vod &vod)
         return;
     }
     m_youtube.ensureVodEmbeddable(vod.youtubeId);
+}
+
+void AppController::refreshVodStatus(const Vod &vod)
+{
+    if (!canDeleteVod(vod) || vod.youtubeId.trimmed().isEmpty()) {
+        return;
+    }
+    m_youtube.refreshVodStatus(vod.youtubeId);
 }
 
 QStringList AppController::friends(QString *error) const

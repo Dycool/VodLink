@@ -199,6 +199,13 @@ void SyncPlayer::clear()
     }
 }
 
+void SyncPlayer::showMessage(const QString &message)
+{
+    if (m_pageReady && m_bridge != nullptr) {
+        m_bridge->showMessage(message);
+    }
+}
+
 void SyncPlayer::playIndex(int index)
 {
     if (index < 0 || index >= m_group.size()) {
