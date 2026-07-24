@@ -212,17 +212,21 @@ Vod vodFromVideoResource(const QJsonObject &item)
     const QString uploadStatus = status.value(QStringLiteral("uploadStatus")).toString().toLower();
     const QString processingStatus =
         processingDetails.value(QStringLiteral("processingStatus")).toString().toLower();
+    const qint64 youtubeDurationMs =
+        isoDurationMs(contentDetails.value(QStringLiteral("duration")).toString());
     if (uploadStatus == QStringLiteral("failed") || uploadStatus == QStringLiteral("rejected")
         || uploadStatus == QStringLiteral("deleted")) {
         vod.streamStatus = uploadStatus;
-    } else if (processingStatus == QStringLiteral("processing")) {
-        vod.streamStatus = QStringLiteral("processing");
     } else if (processingStatus == QStringLiteral("failed")) {
         vod.streamStatus = QStringLiteral("failed");
+    } else if (processingStatus == QStringLiteral("processing") && youtubeDurationMs <= 0) {
+        // Live archives keep processingDetails.processingStatus="processing"
+        // (and uploadStatus="uploaded") indefinitely even once the VOD is fully
+        // watchable, so that field alone must never gate playback. What actually
+        // marks an archive YouTube has not materialized yet is the missing
+        // contentDetails.duration (reported as P0D until the player is usable).
+        vod.streamStatus = QStringLiteral("processing");
     } else {
-        // processingDetails.processingStatus is YouTube's authoritative readiness
-        // signal. Live archives may keep status.uploadStatus="uploaded" even
-        // after processing has succeeded and the watch/embed player is usable.
         vod.streamStatus = QStringLiteral("processed");
     }
     vod.startedAt = QDateTime::fromString(meta.value(QStringLiteral("startedAt")).toString(), Qt::ISODateWithMs);
@@ -231,7 +235,7 @@ Vod vodFromVideoResource(const QJsonObject &item)
     }
     vod.durationMs = qint64(meta.value(QStringLiteral("durationMs")).toDouble());
     if (vod.durationMs <= 0) {
-        vod.durationMs = isoDurationMs(contentDetails.value(QStringLiteral("duration")).toString());
+        vod.durationMs = youtubeDurationMs;
     }
     return vod;
 }
