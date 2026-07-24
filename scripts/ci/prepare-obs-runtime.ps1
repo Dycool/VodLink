@@ -220,6 +220,7 @@ Copy-MatchingFiles $bin64 @(
 # Some OBS Windows packages keep helper DLLs next to plugins rather than bin.
 Copy-MatchingFiles $plugins64 @(
   'obs-outputs.dll', 'rtmp-services.dll', 'obs-ffmpeg.dll', 'win-capture.dll', 'win-wasapi.dll',
+  'obs-filters.dll',
   'obs-qsv*.dll', '*qsv*.dll', '*amf*.dll', '*nvenc*.dll', '*encoder*.dll',
   'graphics-hook*.dll') 'obs-plugins\64bit'
 
@@ -249,6 +250,7 @@ Copy-DirectoryIfExists (Join-Path $dataRoot 'obs-plugins\rtmp-services') 'data\o
 Copy-DirectoryIfExists (Join-Path $dataRoot 'obs-plugins\obs-ffmpeg') 'data\obs-plugins\obs-ffmpeg'
 Copy-DirectoryIfExists (Join-Path $dataRoot 'obs-plugins\win-capture') 'data\obs-plugins\win-capture'
 Copy-DirectoryIfExists (Join-Path $dataRoot 'obs-plugins\win-wasapi') 'data\obs-plugins\win-wasapi'
+Copy-DirectoryIfExists (Join-Path $dataRoot 'obs-plugins\obs-filters') 'data\obs-plugins\obs-filters'
 
 Copy-RuntimeDependencyClosure
 
@@ -263,6 +265,7 @@ Assert-FileExists (Join-Path $runtime 'obs-plugins\64bit\rtmp-services.dll') 'Pr
 Assert-FileExists (Join-Path $runtime 'obs-plugins\64bit\obs-ffmpeg.dll') 'Private OBS runtime is missing obs-ffmpeg.dll, required for FFmpeg/AAC encoders and hardware encoders.'
 Assert-FileExists (Join-Path $runtime 'obs-plugins\64bit\win-capture.dll') 'Private OBS runtime is missing win-capture.dll, required for Windows game/window/monitor capture.'
 Assert-FileExists (Join-Path $runtime 'obs-plugins\64bit\win-wasapi.dll') 'Private OBS runtime is missing win-wasapi.dll, required for Windows audio capture.'
+Assert-FileExists (Join-Path $runtime 'obs-plugins\64bit\obs-filters.dll') 'Private OBS runtime is missing obs-filters.dll, required for microphone noise suppression.'
 Assert-DirectoryExists (Join-Path $runtime 'data\libobs') 'Private OBS runtime is missing data\libobs core data directory.'
 Assert-DirectoryExists (Join-Path $runtime 'data\obs-plugins\obs-outputs') 'Private OBS runtime is missing data for obs-outputs.'
 Assert-DirectoryExists (Join-Path $runtime 'data\obs-plugins\rtmp-services') 'Private OBS runtime is missing data for rtmp-services.'

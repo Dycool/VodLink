@@ -68,7 +68,7 @@
       bottom: 12px;
       left: 14px;
       display: grid;
-      grid-template-columns: auto minmax(80px, 1fr) auto;
+      grid-template-columns: auto minmax(80px, 1fr) auto auto auto auto;
       gap: 12px;
       align-items: center;
       padding: 9px 12px;
@@ -105,6 +105,35 @@
       font-variant-numeric: tabular-nums;
       text-align: right;
       white-space: nowrap;
+    }
+
+    #mute {
+      min-width: 28px;
+      border: 0;
+      padding: 2px;
+      color: #fff;
+      background: transparent;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    #volume {
+      width: 88px;
+      margin: 0;
+      accent-color: #7c3aed;
+      cursor: pointer;
+    }
+
+    #fullscreen {
+      min-width: 28px;
+      border: 0;
+      padding: 2px;
+      color: #fff;
+      background: transparent;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
     }
 
     #message {
@@ -151,6 +180,9 @@
       <button id="toggle" type="button" aria-label="Play or pause">&#9654;</button>
       <input id="timeline" type="range" min="0" max="1" step="0.01" value="0" aria-label="Video position">
       <span id="time">0:00 / 0:00</span>
+      <button id="mute" type="button" aria-label="Mute or unmute">&#128266;</button>
+      <input id="volume" type="range" min="0" max="100" step="1" value="100" aria-label="Volume">
+      <button id="fullscreen" type="button" aria-label="Toggle fullscreen">&#9974;</button>
     </div>
     <div id="message" class="visible">Select a VOD to watch</div>
   </main>
@@ -165,7 +197,12 @@
       const toggle = document.getElementById('toggle');
       const timeline = document.getElementById('timeline');
       const timeLabel = document.getElementById('time');
+      const muteButton = document.getElementById('mute');
+      const volumeSlider = document.getElementById('volume');
+      const fullscreenButton = document.getElementById('fullscreen');
       const message = document.getElementById('message');
+      const kVolumeStorageKey = 'vodlink-player-volume';
+      const kMutedStorageKey = 'vodlink-player-muted';
       const appOrigin = 'https://vodlink.app';
       const qualityRank = [
         'highres', 'hd2160', 'hd1440', 'hd1080', 'hd720',
@@ -320,6 +357,55 @@
         });
       }
 
+      function storedVolume() {
+        let raw = null;
+        try { raw = localStorage.getItem(kVolumeStorageKey); } catch (_) {}
+        const value = Number(raw);
+        if (raw === null || !Number.isFinite(value)) return 100;
+        return Math.max(0, Math.min(100, Math.round(value)));
+      }
+
+      function storedMuted() {
+        try { return localStorage.getItem(kMutedStorageKey) === '1'; } catch (_) {}
+        return false;
+      }
+
+      function updateMuteButton() {
+        const muted = storedMuted() || Number(volumeSlider.value) === 0;
+        muteButton.textContent = muted ? '🔇' : '🔊';
+      }
+
+      function applyVolumePreferences(target) {
+        if (!target) return;
+        try {
+          target.setVolume?.(storedVolume());
+          if (storedMuted()) {
+            target.mute?.();
+          } else {
+            target.unMute?.();
+          }
+        } catch (_) {}
+        updateMuteButton();
+      }
+
+      function setVolume(value) {
+        const clean = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+        try { localStorage.setItem(kVolumeStorageKey, String(clean)); } catch (_) {}
+        // Dragging the slider is an explicit "I want to hear this" action.
+        if (clean > 0) {
+          try { localStorage.setItem(kMutedStorageKey, '0'); } catch (_) {}
+        }
+        if (playerReady && player) applyVolumePreferences(player);
+        else updateMuteButton();
+      }
+
+      function toggleMute() {
+        const muted = !storedMuted();
+        try { localStorage.setItem(kMutedStorageKey, muted ? '1' : '0'); } catch (_) {}
+        if (playerReady && player) applyVolumePreferences(player);
+        else updateMuteButton();
+      }
+
       function updateToggle(state) {
         const playing = window.YT && state === window.YT.PlayerState.PLAYING;
         toggle.textContent = playing ? '\u275a\u275a' : '\u25b6';
@@ -400,6 +486,7 @@
             player.playVideo();
           }
           applyPlaybackPreferences(player);
+          applyVolumePreferences(player);
           debug('load-applied', request);
         } catch (error) {
           debug('load-error', { message: String(error), request });
@@ -428,14 +515,22 @@
                 document.body.tabIndex = -1;
                 document.body.focus({ preventScroll: true });
                 applyPlaybackPreferences(player);
+                applyVolumePreferences(player);
                 startReporting();
                 applyPendingLoad();
                 debug('ready');
               },
               onStateChange: handlePlayerState,
               onError(event) {
-                debug('youtube-error', { code: event ? event.data : 'unknown' });
-                showMessage(`YouTube player error ${event ? event.data : 'unknown'}.`);
+                const code = event ? Number(event.data) || 0 : 0;
+                debug('youtube-error', { code });
+                showMessage(`YouTube player error ${code}.`);
+                // Force the next load of this id through loadVideoById again;
+                // seek/play on an errored player silently does nothing.
+                currentVideoId = '';
+                try {
+                  if (bridge && bridge.onPlayerError) bridge.onPlayerError(code);
+                } catch (_) {}
               },
               onAutoplayBlocked() {
                 debug('autoplay-blocked');
@@ -555,6 +650,21 @@
 
       interactionShield.addEventListener('click', togglePlayback);
       toggle.addEventListener('click', togglePlayback);
+      volumeSlider.value = String(storedVolume());
+      updateMuteButton();
+      volumeSlider.addEventListener('input', () => setVolume(volumeSlider.value));
+      muteButton.addEventListener('click', toggleMute);
+
+      // Real fullscreen is owned by the native host: this player is a child
+      // widget, so the browser Fullscreen API would only fill the widget rect.
+      // Ask C++ to promote the player widget to a fullscreen window instead.
+      function requestFullscreen() {
+        try {
+          if (bridge && bridge.requestFullscreen) bridge.requestFullscreen();
+        } catch (_) {}
+      }
+      fullscreenButton.addEventListener('click', requestFullscreen);
+
       document.addEventListener('contextmenu', event => event.preventDefault(), true);
 
       timeline.addEventListener('pointerdown', event => {
@@ -587,7 +697,8 @@
         toggle: togglePlayback,
         message(text) {
           const clean = String(text || '').trim();
-          const persistent = /^select a vod/i.test(clean);
+          // Blocking states must stay on screen; everything else is a toast.
+          const persistent = /^select a vod|still processing|still playing|could not/i.test(clean);
           showMessage(clean, !persistent);
         },
         cacheVideos() {
@@ -629,6 +740,8 @@
         bridge = {
           ready() { post({ type: 'ready' }); },
           onTimeUpdate(seconds) { post({ type: 'time', seconds }); },
+          onPlayerError(code) { post({ type: 'error', code }); },
+          requestFullscreen() { post({ type: 'fullscreen' }); },
           debugLog(category, text) { post({ type: 'debug', category, text }); },
         };
         window.chrome.webview.addEventListener('message', event => {

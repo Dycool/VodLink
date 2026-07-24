@@ -17,6 +17,7 @@ constexpr auto kLastGameSetting = "last_game";
 constexpr auto kRefreshTokenSetting = "oauth_refresh_token";
 constexpr auto kAccountEmailSetting = "account_email";
 constexpr auto kPrivacyModeSetting = "privacy_mode";
+constexpr auto kMicrophoneSetting = "microphone_enabled";
 constexpr auto kFullDesktopSetting = "capture_full_desktop"; // legacy migration
 constexpr auto kPrivacyGameOnly = "game_only";
 constexpr auto kPrivacyGameExternalAudio = "game_external_audio";
@@ -448,6 +449,8 @@ bool AppController::initialize(QString *error)
         || m_privacyMode == QString::fromLatin1(kPrivacyDesktop);
     m_autoRecordEnabled = m_repository.setting(QString::fromLatin1(kAutoRecordSetting),
                                                QStringLiteral("0")) == QStringLiteral("1");
+    m_microphoneEnabled = m_repository.setting(QString::fromLatin1(kMicrophoneSetting),
+                                               QStringLiteral("0")) == QStringLiteral("1");
     m_lastGame = m_repository.setting(QString::fromLatin1(kLastGameSetting));
 
     m_auth.configure(m_config.googleClientId(), m_config.googleClientSecret());
@@ -807,6 +810,16 @@ void AppController::setAutoRecordEnabled(bool enabled)
                        m_youtubeLiveConfirmed);
 }
 
+void AppController::setMicrophoneEnabled(bool enabled)
+{
+    if (m_microphoneEnabled == enabled) {
+        return;
+    }
+    m_microphoneEnabled = enabled;
+    m_repository.setSetting(QString::fromLatin1(kMicrophoneSetting),
+                            enabled ? QStringLiteral("1") : QStringLiteral("0"));
+}
+
 void AppController::setPrivacyMode(const QString &mode)
 {
     const QString normalized = normalizedPrivacyMode(mode);
@@ -1033,6 +1046,7 @@ void AppController::onBroadcastReady(const QString &broadcastId, const QString &
                               || privacy == QString::fromLatin1(kPrivacyDesktop))
                                  ? AudioCaptureSource::GameOnly
                                  : AudioCaptureSource::System;
+    m_streamer.setMicrophoneCaptureEnabled(m_microphoneEnabled);
     if (!m_streamer.start(ingestUrl, captureMode, audioSource, windowHints, &error)) {
         emit errorOccurred(error);
         m_discardingBroadcastId = m_broadcastId;

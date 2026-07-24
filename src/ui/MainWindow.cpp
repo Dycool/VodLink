@@ -9,7 +9,6 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
-#include <QClipboard>
 #include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -1388,10 +1387,10 @@ QWidget *MainWindow::buildVodViewer()
 
     auto *actionRow = new QHBoxLayout;
     actionRow->setSpacing(8);
-    m_copyVodLinkButton = new QPushButton(QStringLiteral("Copy link"));
-    m_copyVodLinkButton->setObjectName(QStringLiteral("GhostButton"));
-    m_copyVodLinkButton->setEnabled(false);
-    actionRow->addWidget(m_copyVodLinkButton);
+    m_openOnYouTubeButton = new QPushButton(QStringLiteral("Open on YouTube"));
+    m_openOnYouTubeButton->setObjectName(QStringLiteral("GhostButton"));
+    m_openOnYouTubeButton->setEnabled(false);
+    actionRow->addWidget(m_openOnYouTubeButton);
     m_deleteVodButton = new QPushButton(QStringLiteral("Delete"));
     m_deleteVodButton->setObjectName(QStringLiteral("DangerButton"));
     m_deleteVodButton->setEnabled(false);
@@ -1409,7 +1408,7 @@ QWidget *MainWindow::buildVodViewer()
     connect(close, &QToolButton::clicked, this, [this] {
         clearVodViewer();
     });
-    connect(m_copyVodLinkButton, &QPushButton::clicked, this, &MainWindow::copyVodLinkClicked);
+    connect(m_openOnYouTubeButton, &QPushButton::clicked, this, &MainWindow::openOnYouTubeClicked);
     connect(m_deleteVodButton, &QPushButton::clicked, this, &MainWindow::deleteVodClicked);
     return panel;
 }
@@ -1697,6 +1696,13 @@ void MainWindow::openSettingsDialog()
     connect(privacy, &QComboBox::currentTextChanged, this, [this](const QString &text) {
         m_controller->setPrivacyMode(privacyModeForLabel(text));
     });
+
+    auto *microphone = new QCheckBox(QStringLiteral("Capture the default microphone"));
+    microphone->setChecked(m_controller->microphoneEnabled());
+    microphone->setToolTip(QStringLiteral(
+        "Records your system default microphone in every privacy mode. Applies to the next stream."));
+    form->addRow(QStringLiteral("Microphone"), microphone);
+    connect(microphone, &QCheckBox::toggled, this, [this](bool on) { m_controller->setMicrophoneEnabled(on); });
 
     auto *autoRecord = new QCheckBox(QStringLiteral("Automatically record supported games"));
     autoRecord->setChecked(m_controller->autoRecordEnabled());
@@ -2183,7 +2189,9 @@ void MainWindow::rebuildVodGrid()
         game->setMaximumHeight(18);
         layout->addWidget(game);
 
-        auto *meta = new QLabel(QStringLiteral("%1 • %2").arg(relativeTimeText(vod.startedAt), durationText(vod.durationMs)), card);
+        // The duration already sits on the thumbnail badge; keep the meta line
+        // to the relative age only.
+        auto *meta = new QLabel(relativeTimeText(vod.startedAt), card);
         meta->setObjectName(QStringLiteral("VodMeta"));
         meta->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         meta->setWordWrap(false);
@@ -2316,8 +2324,8 @@ void MainWindow::showVodInViewerAt(const Vod &vod, int selectedGridRow, double s
                                               : QStringLiteral("Only the signed-in owner can delete this YouTube VOD."));
         }
     }
-    if (m_copyVodLinkButton != nullptr) {
-        m_copyVodLinkButton->setEnabled(!vod.youtubeId.trimmed().isEmpty());
+    if (m_openOnYouTubeButton != nullptr) {
+        m_openOnYouTubeButton->setEnabled(!vod.youtubeId.trimmed().isEmpty());
     }
     const double selectedStart = startSeconds >= 0.0
                                      ? clampVodOffset(vod, startSeconds)
@@ -2540,8 +2548,8 @@ void MainWindow::clearVodViewer()
     if (m_syncPlayer != nullptr) {
         m_syncPlayer->clear();
     }
-    if (m_copyVodLinkButton != nullptr) {
-        m_copyVodLinkButton->setEnabled(false);
+    if (m_openOnYouTubeButton != nullptr) {
+        m_openOnYouTubeButton->setEnabled(false);
     }
     if (m_deleteVodButton != nullptr) {
         m_deleteVodButton->setVisible(true);
@@ -2562,7 +2570,7 @@ void MainWindow::clearVodViewer()
     updateVodCardSelection();
 }
 
-void MainWindow::copyVodLinkClicked()
+void MainWindow::openOnYouTubeClicked()
 {
     if (!m_hasViewerVod || m_viewerVod.youtubeId.trimmed().isEmpty()) {
         return;
@@ -2570,15 +2578,8 @@ void MainWindow::copyVodLinkClicked()
     const double currentOffset = m_syncPlayer != nullptr
                                      ? m_syncPlayer->currentTimeSeconds()
                                      : m_viewerStartSeconds;
-    QApplication::clipboard()->setText(youtubeWatchUrl(m_viewerVod.youtubeId, static_cast<int>(std::floor(currentOffset))));
-    if (m_copyVodLinkButton != nullptr) {
-        m_copyVodLinkButton->setText(QStringLiteral("Copied!"));
-        QTimer::singleShot(1500, m_copyVodLinkButton, [this] {
-            if (m_copyVodLinkButton != nullptr) {
-                m_copyVodLinkButton->setText(QStringLiteral("Copy link"));
-            }
-        });
-    }
+    QDesktopServices::openUrl(
+        QUrl(youtubeWatchUrl(m_viewerVod.youtubeId, static_cast<int>(std::floor(currentOffset)))));
 }
 
 void MainWindow::deleteVodClicked()

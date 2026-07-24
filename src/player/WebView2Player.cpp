@@ -390,6 +390,14 @@ void WebView2Player::handleWebMessage(const QString &json)
         }
         return;
     }
+    if (type == QStringLiteral("error")) {
+        emit playerError(object.value(QStringLiteral("code")).toInt());
+        return;
+    }
+    if (type == QStringLiteral("fullscreen")) {
+        emit fullscreenToggleRequested();
+        return;
+    }
     if (type == QStringLiteral("debug")) {
         emit debugMessage(
             object.value(QStringLiteral("category")).toString(),

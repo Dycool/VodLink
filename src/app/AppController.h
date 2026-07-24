@@ -59,6 +59,7 @@ public:
     [[nodiscard]] QString privacyMode() const;
     [[nodiscard]] bool captureFullDesktop() const;
     [[nodiscard]] bool autoRecordEnabled() const;
+    [[nodiscard]] bool microphoneEnabled() const { return m_microphoneEnabled; }
     [[nodiscard]] bool isWorkerConfigured() const;
 
     // True when a refresh token is stored, i.e. a silent sign-in is being restored
@@ -88,6 +89,7 @@ public slots:
     void setPrivacyMode(const QString &mode);
     void setCaptureFullDesktop(bool enabled);
     void setAutoRecordEnabled(bool enabled);
+    void setMicrophoneEnabled(bool enabled);
     void syncOwnLibrary();
     void addUserGame(const QString &executable, const QString &name);
     void deleteVod(const Vod &vod);
@@ -165,6 +167,7 @@ private:
     QString m_privacyMode;
     bool m_captureFullDesktop = false; // kept only to migrate old settings
     bool m_autoRecordEnabled = false;
+    bool m_microphoneEnabled = false;
     bool m_eligibilityChecked = false;
     bool m_explicitlySignedOut = false;
     bool m_friendSessionAnnounced = false;

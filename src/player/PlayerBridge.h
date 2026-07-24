@@ -29,6 +29,8 @@ public slots:
     // Invoked from JavaScript.
     void ready();
     void onTimeUpdate(double seconds);
+    void onPlayerError(double code);
+    void requestFullscreen();
     void debugLog(const QString &category, const QString &message);
 
 signals:
@@ -43,6 +45,8 @@ signals:
     // To C++ consumers.
     void pageReady();
     void timeUpdated(double seconds);
+    void playerErrorOccurred(int code);
+    void fullscreenToggleRequested();
 
 private:
     double m_currentTime = 0.0;

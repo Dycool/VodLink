@@ -31,6 +31,8 @@ public slots:
 signals:
     void pageReady();
     void timeUpdated(double seconds);
+    void playerError(int code);
+    void fullscreenToggleRequested();
     void debugMessage(const QString &category, const QString &message);
     void fatalError(const QString &message);
 

@@ -72,6 +72,19 @@ void PlayerBridge::onTimeUpdate(double seconds)
     emit timeUpdated(seconds);
 }
 
+void PlayerBridge::onPlayerError(double code)
+{
+    DebugLog::writeCategory(QStringLiteral("LiteYouTube"),
+                            QStringLiteral("JS player error code=%1").arg(int(code)));
+    emit playerErrorOccurred(int(code));
+}
+
+void PlayerBridge::requestFullscreen()
+{
+    DebugLog::writeCategory(QStringLiteral("LiteYouTube"), QStringLiteral("JS fullscreen toggle"));
+    emit fullscreenToggleRequested();
+}
+
 void PlayerBridge::debugLog(const QString &category, const QString &message)
 {
     const QString cleanCategory = category.trimmed().isEmpty()

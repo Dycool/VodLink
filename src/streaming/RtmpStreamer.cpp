@@ -343,13 +343,11 @@ QStringList audioSourceCandidates(RtmpStreamer::AudioCaptureSource source)
 #endif
 }
 
-QStringList microphoneSourceCandidates(RtmpStreamer::AudioCaptureSource source)
+QStringList microphoneSourceCandidates()
 {
-    // Only the modes that intentionally include external/system audio should
-    // include the default microphone. Game-only audio stays app-audio-only.
-    if (source == RtmpStreamer::AudioCaptureSource::GameOnly) {
-        return {};
-    }
+    // The microphone is an explicit user setting, independent of the privacy
+    // mode: when the toggle is on, the default microphone is captured even in
+    // Game-only mode.
 #if defined(Q_OS_WIN)
     return {QStringLiteral("wasapi_input_capture")};
 #elif defined(Q_OS_MACOS) || defined(Q_OS_MAC)
@@ -360,6 +358,14 @@ QStringList microphoneSourceCandidates(RtmpStreamer::AudioCaptureSource source)
 #endif
 }
 
+float microphoneVolumeMultiplier()
+{
+    // Default mic capture follows the system input device level and can sound
+    // much quieter than game audio on YouTube. Apply the same moderate default
+    // lift in every privacy mode, with an env override for power users.
+    return envFloatOrDefault("VODLINK_MIC_AUDIO_GAIN", 1.6F, 0.1F, 6.0F);
+}
+
 float captureSourceVolumeMultiplier(const QString &sourceId, RtmpStreamer::AudioCaptureSource source)
 {
     if (source == RtmpStreamer::AudioCaptureSource::GameOnly) {
@@ -367,15 +373,10 @@ float captureSourceVolumeMultiplier(const QString &sourceId, RtmpStreamer::Audio
     }
 
     // OBS' per-process WASAPI source tends to come in close to the game's own
-    // peak level, while default desktop/mic capture follows Windows/system
-    // device volume and can sound much quieter on YouTube. Give the external
-    // audio path a moderate default lift, with env overrides for power users.
-    if (sourceId == QStringLiteral("wasapi_input_capture")
-        || sourceId == QStringLiteral("pulse_input_capture")
-        || sourceId.startsWith(QStringLiteral("coreaudio_input_capture"))) {
-        return envFloatOrDefault("VODLINK_MIC_AUDIO_GAIN", 1.6F, 0.1F, 6.0F);
-    }
-
+    // peak level, while default desktop capture follows Windows/system device
+    // volume and can sound much quieter on YouTube. Give the external audio
+    // path a moderate default lift, with an env override for power users.
+    // (Microphone gain lives in microphoneVolumeMultiplier().)
     return envFloatOrDefault("VODLINK_SYSTEM_AUDIO_GAIN", 2.0F, 0.1F, 6.0F);
 }
 
@@ -2318,27 +2319,50 @@ bool RtmpStreamer::createScene(CaptureMode mode, AudioCaptureSource audioSource,
         }
     }
 
-    for (const QString &sourceId : microphoneSourceCandidates(audioSource)) {
-        DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("trying microphone source %1").arg(sourceId));
-        if (!registeredInputs.contains(sourceId)) {
-            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source %1 not registered").arg(sourceId));
-            continue;
-        }
-        ObsDataPtr settings = makeAudioSourceSettings(sourceId, {});
-        const QByteArray id = utf8(sourceId);
-        m_obs->micSource = obs_source_create_private(id.constData(), "VodLink Microphone", settings.get());
-        if (m_obs->micSource != nullptr && addSourceToScene(m_obs->scene, m_obs->micSource, m_outputSize)) {
-            const float volume = captureSourceVolumeMultiplier(sourceId, audioSource);
-            obs_source_set_volume(m_obs->micSource, volume);
-            obs_source_set_audio_mixers(m_obs->micSource, 1);
-            obs_source_set_monitoring_type(m_obs->micSource, OBS_MONITORING_TYPE_NONE);
-            m_obs->micSourceId = sourceId;
-            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source created %1 volume=%2").arg(sourceId).arg(volume));
-            break;
-        }
-        if (m_obs->micSource != nullptr) {
-            obs_source_release(m_obs->micSource);
-            m_obs->micSource = nullptr;
+    if (m_microphoneCaptureEnabled) {
+        for (const QString &sourceId : microphoneSourceCandidates()) {
+            DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("trying microphone source %1").arg(sourceId));
+            if (!registeredInputs.contains(sourceId)) {
+                DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source %1 not registered").arg(sourceId));
+                continue;
+            }
+            ObsDataPtr settings = makeAudioSourceSettings(sourceId, {});
+            const QByteArray id = utf8(sourceId);
+            m_obs->micSource = obs_source_create_private(id.constData(), "VodLink Microphone", settings.get());
+            if (m_obs->micSource != nullptr && addSourceToScene(m_obs->scene, m_obs->micSource, m_outputSize)) {
+                const float volume = microphoneVolumeMultiplier();
+                obs_source_set_volume(m_obs->micSource, volume);
+                obs_source_set_audio_mixers(m_obs->micSource, 1);
+                obs_source_set_monitoring_type(m_obs->micSource, OBS_MONITORING_TYPE_NONE);
+                m_obs->micSourceId = sourceId;
+                DebugLog::writeCategory(QStringLiteral("OBS"), QStringLiteral("microphone source created %1 volume=%2").arg(sourceId).arg(volume));
+
+                // Bad/consumer microphones pick up fans, keyboards, and hiss.
+                // Attach OBS' RNNoise suppression (obs-filters) to every mic by
+                // default; the filter is close to transparent on clean voice.
+                if (!envFlagEnabled("VODLINK_DISABLE_MIC_NOISE_SUPPRESSION")) {
+                    ObsDataPtr filterSettings(obs_data_create());
+                    obs_data_set_string(filterSettings.get(), "method", "rnnoise");
+                    obs_source_t *noiseFilter = obs_source_create_private(
+                        "noise_suppress_filter", "VodLink Mic Noise Suppression", filterSettings.get());
+                    if (noiseFilter != nullptr) {
+                        obs_source_filter_add(m_obs->micSource, noiseFilter);
+                        obs_source_release(noiseFilter);
+                        DebugLog::writeCategory(QStringLiteral("OBS"),
+                                                QStringLiteral("microphone noise suppression attached (rnnoise)"));
+                    } else {
+                        // obs-filters.dll missing from the private runtime; the
+                        // mic still works, just without suppression.
+                        DebugLog::writeCategory(QStringLiteral("OBS"),
+                                                QStringLiteral("noise_suppress_filter unavailable; mic runs unfiltered"));
+                    }
+                }
+                break;
+            }
+            if (m_obs->micSource != nullptr) {
+                obs_source_release(m_obs->micSource);
+                m_obs->micSource = nullptr;
+            }
         }
     }
 

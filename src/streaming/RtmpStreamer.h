@@ -26,6 +26,9 @@ public:
 
     void setRecorderSettings(const QString &encoderPreference, int bitrateKbps,
                              const QSize &outputSize, int fps);
+    // When enabled, the default microphone is captured in every privacy mode.
+    // Takes effect on the next start().
+    void setMicrophoneCaptureEnabled(bool enabled) { m_microphoneCaptureEnabled = enabled; }
     // Streamlabs/OBS-style lifecycle: initialize libobs once while the app is
     // idle, then reuse that runtime for every game session. This moves the
     // native OBS startup/module-load/GPU init work away from game detection.
@@ -74,6 +77,7 @@ private:
     QUrl m_ingestUrl;
     CaptureMode m_captureMode = CaptureMode::FullDesktop;
     AudioCaptureSource m_audioSource = AudioCaptureSource::GameOnly;
+    bool m_microphoneCaptureEnabled = false;
     QStringList m_windowHints;
     QString m_encoderPreference = QStringLiteral("H.264");
     int m_bitrateKbps = 12000;

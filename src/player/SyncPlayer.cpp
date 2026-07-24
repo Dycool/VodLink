@@ -23,6 +23,8 @@
 #include <QWebEngineView>
 #endif
 
+#include <QBoxLayout>
+#include <QKeyEvent>
 #include <QStringList>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -214,6 +216,10 @@ SyncPlayer::SyncPlayer(QWidget *parent)
             m_bridge, &PlayerBridge::ready);
     connect(m_view, &WebView2Player::timeUpdated,
             m_bridge, &PlayerBridge::onTimeUpdate);
+    connect(m_view, &WebView2Player::playerError,
+            this, &SyncPlayer::onPlayerError);
+    connect(m_view, &WebView2Player::fullscreenToggleRequested,
+            this, &SyncPlayer::toggleFullscreen);
     connect(m_view, &WebView2Player::debugMessage,
             m_bridge, &PlayerBridge::debugLog);
 #else
@@ -288,6 +294,10 @@ SyncPlayer::SyncPlayer(QWidget *parent)
 
     connect(m_bridge, &PlayerBridge::pageReady, this, &SyncPlayer::onPageReady);
     connect(m_bridge, &PlayerBridge::timeUpdated, this, &SyncPlayer::onTimeUpdate);
+#if !defined(Q_OS_WIN)
+    connect(m_bridge, &PlayerBridge::playerErrorOccurred, this, &SyncPlayer::onPlayerError);
+    connect(m_bridge, &PlayerBridge::fullscreenToggleRequested, this, &SyncPlayer::toggleFullscreen);
+#endif
 }
 
 SyncPlayer::~SyncPlayer()
@@ -443,6 +453,79 @@ void SyncPlayer::onPageReady()
 void SyncPlayer::onTimeUpdate(double seconds)
 {
     m_currentTime = seconds;
+}
+
+void SyncPlayer::onPlayerError(int code)
+{
+    if (m_current < 0 || m_current >= m_group.size() || m_bridge == nullptr) {
+        return;
+    }
+    const Vod &target = m_group.at(m_current);
+    // 100/101/150 are YouTube's "unavailable / embedding disallowed" codes. For
+    // a friend's VOD the usual cause is VodLink's private-while-live default:
+    // the owner has not finished streaming, so the archive is still private and
+    // only becomes unlisted (watchable) once their stream ends.
+    if (target.isMine() || (code != 100 && code != 101 && code != 150)) {
+        return;
+    }
+    const QString owner = !target.ownerName.trimmed().isEmpty()
+                              ? target.ownerName.trimmed()
+                              : target.ownerEmail.trimmed();
+    m_bridge->showMessage(
+        QStringLiteral("%1 is still playing — this VOD becomes available once their "
+                       "stream ends. Check back later.")
+            .arg(owner.isEmpty() ? QStringLiteral("Your friend") : owner));
+}
+
+void SyncPlayer::toggleFullscreen()
+{
+    if (!m_fullscreen) {
+        // Remember the exact slot in the parent's box layout so the widget can
+        // be dropped back in place (with its stretch factor) on exit.
+        m_normalParent = parentWidget();
+        m_normalLayoutIndex = -1;
+        m_normalStretch = 0;
+        if (auto *box = m_normalParent
+                            ? qobject_cast<QBoxLayout *>(m_normalParent->layout())
+                            : nullptr) {
+            m_normalLayoutIndex = box->indexOf(this);
+            if (m_normalLayoutIndex >= 0) {
+                m_normalStretch = box->stretch(m_normalLayoutIndex);
+            }
+        }
+        setParent(nullptr);
+        setWindowFlag(Qt::Window, true);
+        setWindowTitle(QStringLiteral("VodLink"));
+        showFullScreen();
+        raise();
+        activateWindow();
+        setFocus(Qt::OtherFocusReason);
+        m_fullscreen = true;
+        return;
+    }
+
+    setWindowFlag(Qt::Window, false);
+    if (auto *box = m_normalParent
+                        ? qobject_cast<QBoxLayout *>(m_normalParent->layout())
+                        : nullptr;
+        box != nullptr && m_normalLayoutIndex >= 0) {
+        box->insertWidget(m_normalLayoutIndex, this, m_normalStretch);
+    } else if (m_normalParent != nullptr) {
+        setParent(m_normalParent);
+    }
+    showNormal();
+    show();
+    m_fullscreen = false;
+}
+
+void SyncPlayer::keyPressEvent(QKeyEvent *event)
+{
+    if (m_fullscreen && event->key() == Qt::Key_Escape) {
+        toggleFullscreen();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
 }
 
 qint64 SyncPlayer::absolutePositionMs() const

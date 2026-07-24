@@ -56,7 +56,7 @@ private slots:
     void toggleShare(bool enabled);
     void openSettingsDialog();
     void deleteVodClicked();
-    void copyVodLinkClicked();
+    void openOnYouTubeClicked();
 
 private:
     void buildUi();
@@ -143,7 +143,7 @@ private:
     QWidget *m_participantStrip = nullptr;
     QHBoxLayout *m_participantLayout = nullptr;
     SyncPlayer *m_syncPlayer = nullptr;
-    QPushButton *m_copyVodLinkButton = nullptr;
+    QPushButton *m_openOnYouTubeButton = nullptr;
     QPushButton *m_deleteVodButton = nullptr;
 
     QLabel *m_vodsStat = nullptr;

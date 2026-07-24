@@ -6,6 +6,7 @@
 #include <QWidget>
 
 class PlayerBridge;
+class QKeyEvent;
 #if defined(Q_OS_WIN)
 class WebView2Player;
 #else
@@ -47,9 +48,14 @@ public:
 signals:
     void currentChanged(int index);
 
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+
 private slots:
     void onPageReady();
     void onTimeUpdate(double seconds);
+    void onPlayerError(int code);
+    void toggleFullscreen();
 
 private:
     void loadCurrent(double offsetSeconds, const QString &note = {});
@@ -70,4 +76,11 @@ private:
     bool m_pageReady = false;
     int m_pendingIndex = -1;
     double m_pendingOffsetSeconds = 0.0;
+
+    // Fullscreen promotes this widget to a top-level window and back; remember
+    // where it lived in its parent layout so it can be restored in place.
+    bool m_fullscreen = false;
+    QWidget *m_normalParent = nullptr;
+    int m_normalLayoutIndex = -1;
+    int m_normalStretch = 0;
 };

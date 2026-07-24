@@ -288,7 +288,10 @@ static QJsonObject vodLinkSafeVideoStatus()
     // YouTube Data API v3 does not expose per-video switches for comments,
     // ratings, live-chat creation, or Clips availability. These are the closest
     // writable video-status defaults VodLink can enforce automatically:
-    //   - unlisted: linkable/embeddable, but not searchable or channel-listed;
+    //   - unlisted: linkable/embeddable, but not searchable or channel-listed.
+    //     Broadcasts are created private (hidden while the stream is live), so
+    //     writing unlisted here is also what publishes the archive to friends
+    //     once the stream has ended;
     //   - embeddable: required by the in-app player;
     //   - publicStatsViewable=false: hides extended public stats/ratings UI;
     //   - selfDeclaredMadeForKids=false: keeps Clips eligible when the channel's
@@ -397,6 +400,11 @@ void YouTubeLiveClient::setStreamSettings(const QString &resolution, int fps)
         }
     }
 
+    // Declare the rounded-up 16:9 height tier, not the raw canvas size. YouTube
+    // only exposes an ultrawide resolution like 3440x1440 under the quality tier
+    // whose pixel count contains it: 3440x1440 must be advertised as the 2160p
+    // (4K) tier so viewers get 3440x1440 when they pick "4K". Declaring a lower
+    // tier (or "variable") drops the 4K rung and caps the archive below source.
     m_resolution = youtubeCdnResolutionForFrame(width, height);
     m_frameRate = fps == 30 ? QStringLiteral("30fps") : QStringLiteral("60fps");
 }
@@ -518,9 +526,13 @@ void YouTubeLiveClient::prepareBroadcast(const QString &game)
               startedUtc.addSecs(5).toString(Qt::ISODate)}
          }},
         {QStringLiteral("status"), QJsonObject {
-             // Unlisted so friends can watch (and the in-app player can embed) the
-             // VOD via its link; it stays unsearchable and off your channel.
-             {QStringLiteral("privacyStatus"), QStringLiteral("unlisted")},
+             // Private while the stream is live: nobody (including friends with
+             // the link) can watch until the streamer finishes. After the
+             // broadcast completes, ensureVodEmbeddable() re-asserts the safe
+             // VOD status, which flips the archive to unlisted so friends can
+             // watch it via its link while it stays unsearchable and off the
+             // channel.
+             {QStringLiteral("privacyStatus"), QStringLiteral("private")},
              {QStringLiteral("selfDeclaredMadeForKids"), false}
          }},
         {QStringLiteral("contentDetails"), QJsonObject {
