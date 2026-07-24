@@ -12,5 +12,6 @@
   </qresource>
   <qresource prefix="/player">
     <file alias="player.html">player/player.html</file>
+    <file alias="lite-youtube.LICENSE.txt">player/lite-youtube.LICENSE.txt</file>
   </qresource>
 </RCC>

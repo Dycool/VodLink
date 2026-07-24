@@ -1,823 +1,682 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>VodLink Player</title>
-  <link rel="preconnect" href="https://www.youtube-nocookie.com">
   <link rel="preconnect" href="https://www.youtube.com">
   <link rel="preconnect" href="https://i.ytimg.com">
   <style>
-    html, body { margin: 0; width: 100%; height: 100%; background: #07080b; overflow: hidden; }
-    #players { position: fixed; inset: 0; width: 100vw; height: 100vh; background: #07080b; overflow: hidden; }
-    .playerSlot { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #07080b; display: block; opacity: 0; pointer-events: none; z-index: 0; overflow: hidden; }
-    .playerSlot.active { opacity: 1; pointer-events: auto; z-index: 1; }
-    vodlink-lite-youtube, vodlink-lite-youtube iframe, vodlink-lite-youtube .lyt-player { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-    vodlink-lite-youtube { display: block; contain: content; background: #000 center center / cover no-repeat; cursor: pointer; }
-    vodlink-lite-youtube::before {
-      content: attr(data-title); display: block; position: absolute; top: 0; left: 0; right: 0; height: 99px;
-      color: hsl(0deg 0% 93.33%); text-shadow: 0 0 2px rgba(0,0,0,.5);
-      font: 18px "YouTube Noto", Roboto, Arial, Helvetica, sans-serif; padding: 25px 20px; overflow: hidden;
-      white-space: nowrap; text-overflow: ellipsis; box-sizing: border-box;
-      background-image: linear-gradient(180deg, rgb(0 0 0 / 67%) 0%, rgb(0 0 0 / 54%) 14%, rgb(0 0 0 / 15%) 54%, rgb(0 0 0 / 5%) 72%, rgb(0 0 0 / 0%) 94%);
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
     }
-    vodlink-lite-youtube.lyt-activated { cursor: unset; }
-    vodlink-lite-youtube.lyt-activated::before, vodlink-lite-youtube.lyt-activated > .lyt-playbtn { opacity: 0; pointer-events: none; }
-    .lyt-playbtn {
-      position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; border: 0; cursor: pointer;
-      background: no-repeat center / 84px 59px; filter: grayscale(100%); transition: filter .1s cubic-bezier(0, 0, 0.2, 1);
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='68' height='48' viewBox='0 0 68 48'%3E%3Cpath fill='%23f00' d='M66.52 7.74a8.27 8.27 0 0 0-5.82-5.86C55.56.5 34 .5 34 .5S12.44.5 7.3 1.88a8.27 8.27 0 0 0-5.82 5.86C.1 12.9.1 24 .1 24s0 11.1 1.38 16.26a8.27 8.27 0 0 0 5.82 5.86C12.44 47.5 34 47.5 34 47.5s21.56 0 26.7-1.38a8.27 8.27 0 0 0 5.82-5.86C67.9 35.1 67.9 24 67.9 24s0-11.1-1.38-16.26z'/%3E%3Cpath fill='%23fff' d='M45 24 27 14v20z'/%3E%3C/svg%3E");
+
+    html,
+    body,
+    #player-root,
+    #video-stage {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
     }
-    vodlink-lite-youtube:hover > .lyt-playbtn, .lyt-playbtn:focus { filter: none; }
-    .lyt-visually-hidden { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
-    #overlay {
-      position: fixed; inset: 0; display: none; place-items: center;
-      color: #8d94a5; font: 16px sans-serif; text-align: center; padding: 24px;
-      background: rgba(7, 8, 11, 0.82); z-index: 10;
+
+    #player-root,
+    #video-stage {
+      position: relative;
+    }
+
+    lite-youtube {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease;
+      --lite-youtube-aspect-ratio: auto;
+      --lite-youtube-frame-shadow-visible: no;
+    }
+
+    #player-root.player-visible lite-youtube {
+      opacity: 1;
+    }
+
+    lite-youtube::part(playButton) {
+      display: none;
+    }
+
+    #interaction-shield {
+      position: absolute;
+      z-index: 5;
+      inset: 0;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    #controls {
+      position: absolute;
+      z-index: 10;
+      right: 14px;
+      bottom: 12px;
+      left: 14px;
+      display: grid;
+      grid-template-columns: auto minmax(80px, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 12px;
+      border: 1px solid rgba(255, 255, 255, .08);
+      border-radius: 8px;
+      color: #fff;
+      background: rgba(0, 0, 0, .72);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .28);
+      font: 13px/1.2 Inter, "Segoe UI", system-ui, sans-serif;
+      user-select: none;
+    }
+
+    #toggle {
+      min-width: 32px;
+      border: 0;
+      padding: 2px 4px;
+      color: #fff;
+      background: transparent;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    #timeline {
+      width: 100%;
+      margin: 0;
+      accent-color: #7c3aed;
+      cursor: pointer;
+    }
+
+    #time {
+      min-width: 94px;
+      color: rgba(255, 255, 255, .92);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    #message {
+      position: absolute;
+      z-index: 20;
+      inset: 0;
+      display: none;
+      place-items: center;
+      box-sizing: border-box;
+      padding: 32px;
+      color: #d6dae4;
+      background: rgba(0, 0, 0, .82);
+      font: 15px/1.45 Inter, "Segoe UI", system-ui, sans-serif;
+      text-align: center;
+      white-space: pre-wrap;
+    }
+
+    #message.visible {
+      display: grid;
+    }
+
+    #message.transient {
+      pointer-events: none;
+      background: rgba(0, 0, 0, .62);
     }
   </style>
+
+  <!--
+    @justinribeiro/lite-youtube 1.9.0
+    MIT License, Copyright (c) 2019 Justin Ribeiro
+    Vendored from jsDelivr; SHA-256:
+    b6f2214d4dff4d40fea9ef898f3489d0185cbd923420c46474d48733551dbf39
+  -->
+  <script type="module">
+    export class LiteYTEmbed extends HTMLElement{constructor(){super(),this.isIframeLoaded=!1,this.isPlaylistThumbnailLoaded=!1,this.setupDom()}static get observedAttributes(){return["videoid","playlistid","videoplay","videotitle"]}connectedCallback(){this.addEventListener("pointerover",(()=>LiteYTEmbed.warmConnections(this)),{once:!0}),this.addEventListener("click",(()=>this.addIframe()))}get videoId(){return encodeURIComponent(this.getAttribute("videoid")||"")}set videoId(t){this.setAttribute("videoid",t)}get playlistId(){return encodeURIComponent(this.getAttribute("playlistid")||"")}set playlistId(t){this.setAttribute("playlistid",t)}get videoTitle(){return this.getAttribute("videotitle")||"Video"}set videoTitle(t){this.setAttribute("videotitle",t)}get videoPlay(){return this.getAttribute("videoplay")||"Play"}set videoPlay(t){this.setAttribute("videoplay",t)}get videoStartAt(){return this.getAttribute("videoStartAt")||"0"}get autoLoad(){return this.hasAttribute("autoload")}get autoPause(){return this.hasAttribute("autopause")}get noCookie(){return this.hasAttribute("nocookie")}get posterQuality(){return this.getAttribute("posterquality")||"hqdefault"}get posterLoading(){return this.getAttribute("posterloading")||"lazy"}get params(){return`start=${this.videoStartAt}&${this.getAttribute("params")}`}set params(t){this.setAttribute("params",t)}set posterQuality(t){this.setAttribute("posterquality",t)}get disableNoscript(){return this.hasAttribute("disablenoscript")}setupDom(){const t=this.attachShadow({mode:"open"});let e="";window.liteYouTubeNonce&&(e=`nonce="${window.liteYouTubeNonce}"`),t.innerHTML=`\n      <style ${e}>\n        :host {\n          --aspect-ratio: var(--lite-youtube-aspect-ratio, 16 / 9);\n          --aspect-ratio-short: var(--lite-youtube-aspect-ratio-short, 9 / 16);\n          --frame-shadow-visible: var(--lite-youtube-frame-shadow-visible, yes);\n          contain: content;\n          display: block;\n          position: relative;\n          width: 100%;\n          aspect-ratio: var(--aspect-ratio);\n        }\n\n        @media (max-width: 40em) {\n          :host([short]) {\n            aspect-ratio: var(--aspect-ratio-short);\n          }\n        }\n\n        #frame, #fallbackPlaceholder, iframe {\n          position: absolute;\n          width: 100%;\n          height: 100%;\n          left: 0;\n          top: 0;\n        }\n\n        #frame {\n          cursor: pointer;\n        }\n\n        #fallbackPlaceholder, slot[name=image]::slotted(*) {\n          object-fit: cover;\n          width: 100%;\n          height: 100%;\n        }\n\n        @container style(--frame-shadow-visible: yes) {\n          #frame::before {\n            content: '';\n            display: block;\n            position: absolute;\n            top: 0;\n            background-image: linear-gradient(180deg, #111 -20%, transparent 90%);\n            height: 60px;\n            width: 100%;\n            z-index: 1;\n          }\n        }\n\n        #playButton {\n          width: 68px;\n          height: 48px;\n          background-color: transparent;\n          background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 68 48"><path d="M66.52 7.74c-.78-2.93-2.49-5.41-5.42-6.19C55.79.13 34 0 34 0S12.21.13 6.9 1.55c-2.93.78-4.63 3.26-5.42 6.19C.06 13.05 0 24 0 24s.06 10.95 1.48 16.26c.78 2.93 2.49 5.41 5.42 6.19C12.21 47.87 34 48 34 48s21.79-.13 27.1-1.55c2.93-.78 4.64-3.26 5.42-6.19C67.94 34.95 68 24 68 24s-.06-10.95-1.48-16.26z" fill="red"/><path d="M45 24 27 14v20" fill="white"/></svg>');\n          z-index: 1;\n          border: 0;\n          border-radius: inherit;\n        }\n\n        #playButton:before {\n          content: '';\n          border-style: solid;\n          border-width: 11px 0 11px 19px;\n          border-color: transparent transparent transparent #fff;\n        }\n\n        #playButton,\n        #playButton:before {\n          position: absolute;\n          top: 50%;\n          left: 50%;\n          transform: translate3d(-50%, -50%, 0);\n          cursor: inherit;\n        }\n\n        .activated {\n          cursor: unset;\n        }\n\n        #frame.activated::before,\n        #frame.activated > #playButton {\n          display: none;\n        }\n      </style>\n      <div id="frame">\n        <picture>\n          <slot name=image>\n            <source id=webpPlaceholder type=image/webp>\n            <source id=jpegPlaceholder type=image/jpeg>\n            <img id=fallbackPlaceholder referrerpolicy=origin loading=lazy>\n          </slot>\n        </picture>\n        <button id=playButton part=playButton></button>\n      </div>\n    `,this.domRefFrame=t.querySelector("#frame"),this.domRefImg={fallback:t.querySelector("#fallbackPlaceholder"),webp:t.querySelector("#webpPlaceholder"),jpeg:t.querySelector("#jpegPlaceholder")},this.domRefPlayButton=t.querySelector("#playButton")}setupComponent(){0===this.shadowRoot.querySelector("slot[name=image]").assignedNodes().length&&this.initImagePlaceholder(),this.domRefPlayButton.setAttribute("aria-label",`${this.videoPlay}: ${this.videoTitle}`),this.setAttribute("title",`${this.videoPlay}: ${this.videoTitle}`),(this.autoLoad||this.isYouTubeShort()||this.autoPause)&&this.initIntersectionObserver(),this.disableNoscript||this.injectSearchNoScript()}attributeChangedCallback(t,e,i){e!==i&&("playlistid"===t&&null!==e&&e!==i&&(this.isPlaylistThumbnailLoaded=!1),this.setupComponent(),this.domRefFrame.classList.contains("activated")&&(this.domRefFrame.classList.remove("activated"),this.shadowRoot.querySelector("iframe").remove(),this.isIframeLoaded=!1))}injectSearchNoScript(){const t=document.createElement("noscript");this.prepend(t),t.innerHTML=this.generateIframe()}generateIframe(t=!1){let e=t?0:1,i=this.autoPause?"&enablejsapi=1":"";const o=this.noCookie?"-nocookie":"";let s;return s=this.playlistId?`?listType=playlist&list=${this.playlistId}&`:`${this.videoId}?`,this.isYouTubeShort()&&(this.params=`loop=1&mute=1&modestbranding=1&playsinline=1&rel=0&enablejsapi=1&playlist=${this.videoId}`,e=1),`\n<iframe credentialless frameborder="0" title="${this.videoTitle}"\n  referrerpolicy="strict-origin-when-cross-origin"\n  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen\n  src="https://www.youtube${o}.com/embed/${s}autoplay=${e}${i}&${this.params}"\n></iframe>`}addIframe(t=!1){if(!this.isIframeLoaded){const e=this.generateIframe(t);this.domRefFrame.insertAdjacentHTML("beforeend",e),this.domRefFrame.classList.add("activated"),this.isIframeLoaded=!0,this.attemptShortAutoPlay(),this.dispatchEvent(new CustomEvent("liteYoutubeIframeLoaded",{detail:{videoId:this.videoId},bubbles:!0,cancelable:!0}))}}initImagePlaceholder(){this.playlistId&&!this.videoId?this.loadPlaylistThumbnail():this.testPosterImage(),this.domRefImg.fallback.setAttribute("aria-label",`${this.videoPlay}: ${this.videoTitle}`),this.domRefImg?.fallback?.setAttribute("alt",`${this.videoPlay}: ${this.videoTitle}`)}async loadPlaylistThumbnail(){if(!this.isPlaylistThumbnailLoaded){this.isPlaylistThumbnailLoaded=!0;try{const t=`https://www.youtube.com/oembed?url=https://www.youtube.com/playlist?list=${this.playlistId}&format=json`,e=await fetch(t);if(!e.ok)throw new Error(`Failed to fetch playlist thumbnail: ${e.status}`);const i=await e.json();if(i.thumbnail_url){const t=i.thumbnail_url,e=t.match(/\/vi\/([^\/]+)\//);if(e){const t=e[1];this.loadThumbnailImages(t)}else this.domRefImg.fallback.src=t,this.domRefImg.fallback.loading=this.posterLoading}}catch(t){console.warn("Failed to load playlist thumbnail:",t)}}}loadThumbnailImages(t){const e=`https://i.ytimg.com/vi_webp/${t}/${this.posterQuality}.webp`;this.domRefImg.webp.srcset=e;const i=`https://i.ytimg.com/vi/${t}/${this.posterQuality}.jpg`;this.domRefImg.jpeg.srcset=i,this.domRefImg.fallback.src=i,this.domRefImg.fallback.loading=this.posterLoading}async testPosterImage(){setTimeout((()=>{const t=`https://i.ytimg.com/vi_webp/${this.videoId}/${this.posterQuality}.webp`,e=new Image;e.fetchPriority="low",e.referrerPolicy="origin",e.src=t,e.onload=async t=>{const e=t.target;90==e?.naturalHeight&&120==e?.naturalWidth&&(this.posterQuality="hqdefault"),this.loadThumbnailImages(this.videoId)}}),100)}initIntersectionObserver(){if(new IntersectionObserver(((t,e)=>{t.forEach((t=>{t.isIntersecting&&!this.isIframeLoaded&&(LiteYTEmbed.warmConnections(this),this.addIframe(!0),e.unobserve(this))}))}),{root:null,rootMargin:"0px",threshold:0}).observe(this),this.autoPause){new IntersectionObserver(((t,e)=>{t.forEach((t=>{1!==t.intersectionRatio&&this.shadowRoot.querySelector("iframe")?.contentWindow?.postMessage('{"event":"command","func":"pauseVideo","args":""}',"*")}))}),{threshold:1}).observe(this)}}attemptShortAutoPlay(){this.isYouTubeShort()&&setTimeout((()=>{this.shadowRoot.querySelector("iframe")?.contentWindow?.postMessage('{"event":"command","func":"playVideo","args":""}',"*")}),2e3)}isYouTubeShort(){return""===this.getAttribute("short")&&window.matchMedia("(max-width: 40em)").matches}static addPrefetch(t,e){const i=document.createElement("link");i.rel=t,i.href=e,i.crossOrigin="true",document.head.append(i)}static warmConnections(t){LiteYTEmbed.isPreconnected||window.liteYouTubeIsPreconnected||(LiteYTEmbed.addPrefetch("preconnect","https://i.ytimg.com/"),LiteYTEmbed.addPrefetch("preconnect","https://s.ytimg.com"),t.noCookie?LiteYTEmbed.addPrefetch("preconnect","https://www.youtube-nocookie.com"):(LiteYTEmbed.addPrefetch("preconnect","https://www.youtube.com"),LiteYTEmbed.addPrefetch("preconnect","https://www.google.com"),LiteYTEmbed.addPrefetch("preconnect","https://googleads.g.doubleclick.net"),LiteYTEmbed.addPrefetch("preconnect","https://static.doubleclick.net")),LiteYTEmbed.isPreconnected=!0,window.liteYouTubeIsPreconnected=!0)}}LiteYTEmbed.isPreconnected=!1,customElements.define("lite-youtube",LiteYTEmbed);
+  </script>
+  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
-  <div id="players"></div>
-  <div id="overlay">Select a VOD to watch</div>
+  <main id="player-root">
+    <section id="video-stage" aria-label="VodLink VOD player"></section>
+    <button id="interaction-shield" type="button" aria-label="Play or pause"></button>
+    <div id="controls" role="group" aria-label="Playback controls">
+      <button id="toggle" type="button" aria-label="Play or pause">&#9654;</button>
+      <input id="timeline" type="range" min="0" max="1" step="0.01" value="0" aria-label="Video position">
+      <span id="time">0:00 / 0:00</span>
+    </div>
+    <div id="message" class="visible">Select a VOD to watch</div>
+  </main>
 
-  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <script>
-    let bridge = null;
-    let pendingLoad = null;      // { videoId, seek }
-    let pendingCache = [];       // video ids requested before the bridge is ready
-    let activeId = '';
-    let lastLoad = null;
-    let retryCount = 0;
-    let retryTimer = null;
-    let reportTimer = null;
-    let nextSlot = 1;
-    const players = new Map();   // videoId -> { element, div, player, ready, pendingSeek, lastUsed, raw, rawStartedAt }
-    const maxCachedPlayers = 10;
-    const appOrigin = (window.location.origin && window.location.origin !== 'null')
-      ? window.location.origin
-      : 'https://vodlink.app';
-    // Qt WebEngine reaches YouTube IFrame API onReady, then the HTML5 player
-    // fails with error 5 on this packaged runtime. The real lite-youtube-embed
-    // behavior is a lightweight facade that injects a normal iframe on demand,
-    // so make that the primary VodLink path inside Qt. POV switching still stays
-    // in sync because VodLink tracks playback time with its own monotonic clock.
-    const youtubePlayerHost = 'https://www.youtube.com';
-    const useRawIframeByDefault = true;
-    const bootTimeMs = Date.now();
+    (() => {
+      'use strict';
 
-    function safeStringify(value) {
-      try {
-        return JSON.stringify(value, (key, inner) => {
-          if (inner instanceof Error) {
-            return { name: inner.name, message: inner.message, stack: inner.stack };
-          }
-          if (typeof inner === 'function') return '[function]';
-          if (inner && inner.nodeType) return '[dom-node ' + (inner.nodeName || '?') + ']';
-          return inner;
-        });
-      } catch (error) {
-        try { return String(value); } catch (_) { return '<unserializable>'; }
-      }
-    }
+      const root = document.getElementById('player-root');
+      const stage = document.getElementById('video-stage');
+      const interactionShield = document.getElementById('interaction-shield');
+      const toggle = document.getElementById('toggle');
+      const timeline = document.getElementById('timeline');
+      const timeLabel = document.getElementById('time');
+      const message = document.getElementById('message');
+      const appOrigin = 'https://vodlink.app';
+      const qualityRank = [
+        'highres', 'hd2160', 'hd1440', 'hd1080', 'hd720',
+        'large', 'medium', 'small', 'tiny'
+      ];
 
-    function dbg(event, payload) {
-      const message = safeStringify({
-        t: Date.now() - bootTimeMs,
-        event,
-        activeId,
-        payload: payload || {},
-      });
-      try { console.log('[VodLink LiteYouTube] ' + message); } catch (_) {}
-      try { if (bridge && bridge.debugLog) bridge.debugLog('JS', message); } catch (_) {}
-    }
+      let bridge = null;
+      let lite = null;
+      let player = null;
+      let playerReady = false;
+      let attachPromise = null;
+      let pendingLoad = null;
+      let currentVideoId = '';
+      let lastTime = 0;
+      let lastDuration = 0;
+      let scrubbing = false;
+      let endFreezeInProgress = false;
+      let reportTimer = null;
+      let messageTimer = null;
+      let resizeObserver = null;
+      let lastQualityDebug = '';
+      let frameMessageCount = 0;
+      const bootTimeMs = Date.now();
 
-    window.addEventListener('error', (event) => {
-      dbg('window-error', {
-        message: event.message,
-        source: event.filename,
-        line: event.lineno,
-        column: event.colno,
-        error: event.error,
-      });
-    });
-    window.addEventListener('unhandledrejection', (event) => {
-      dbg('unhandled-rejection', { reason: event.reason });
-    });
-
-    // Adapted for VodLink from the lite-youtube-embed idea: render a cheap
-    // poster/play facade first, and only create YouTube's heavy iframe/API for
-    // the active POV. VodLink keeps the JS API path because POV switching needs
-    // getCurrentTime() and seekTo() for real-world timestamp sync.
-    let ytApiPromise = null;
-    function loadYouTubeApi() {
-      if (window.YT && window.YT.Player) {
-        dbg('yt-api-already-ready');
-        return Promise.resolve();
-      }
-      if (ytApiPromise) {
-        dbg('yt-api-promise-reused');
-        return ytApiPromise;
-      }
-      dbg('yt-api-load-start', { src: 'https://www.youtube.com/iframe_api' });
-      ytApiPromise = new Promise((resolve, reject) => {
-        const previous = window.onYouTubeIframeAPIReady;
-        window.onYouTubeIframeAPIReady = function () {
-          dbg('yt-api-ready-callback');
-          if (typeof previous === 'function') {
-            try { previous(); } catch (error) { dbg('yt-api-previous-callback-error', { error }); }
-          }
-          resolve();
-        };
-        const tag = document.createElement('script');
-        tag.src = 'https://www.youtube.com/iframe_api';
-        tag.async = true;
-        tag.onerror = (error) => {
-          dbg('yt-api-load-error', { error });
-          reject(error);
-        };
-        document.head.appendChild(tag);
-      });
-      return ytApiPromise;
-    }
-
-    class VodLinkLiteYouTube extends HTMLElement {
-      connectedCallback() {
-        this.videoId = this.getAttribute('videoid') || '';
-        dbg('lite-connected', { videoId: this.videoId });
-        this.playLabel = this.getAttribute('playlabel') || 'Play VOD';
-        this.dataset.title = this.getAttribute('title') || '';
-        this.posterHash = this.posterHash || '';
-        this.posterObjectUrl = this.posterObjectUrl || '';
-        this.posterRawUrl = this.posterRawUrl || '';
-        if (this.videoId) {
-          this.refreshPoster(true);
-          if (!this.posterTimer) {
-            this.posterTimer = window.setInterval(() => this.refreshPoster(false), 5 * 60 * 1000);
-          }
+      function debug(event, details = {}) {
+        let text = '';
+        try {
+          text = JSON.stringify({
+            t: Date.now() - bootTimeMs,
+            event,
+            videoId: currentVideoId,
+            details,
+          });
+        } catch (_) {
+          text = String(event);
         }
-        if (!this.querySelector('.lyt-playbtn')) {
-          const playBtn = document.createElement('button');
-          playBtn.type = 'button';
-          playBtn.className = 'lyt-playbtn';
-          const label = document.createElement('span');
-          label.className = 'lyt-visually-hidden';
-          label.textContent = this.playLabel;
-          playBtn.appendChild(label);
-          this.appendChild(playBtn);
+        try { console.log('[VodLink lite-youtube] ' + text); } catch (_) {}
+        try {
+          if (bridge && bridge.debugLog) bridge.debugLog('Player', text);
+        } catch (_) {}
+      }
+
+      window.addEventListener('message', event => {
+        if (!event.data || event.data.vodlinkVideoFrame !== true) return;
+        if (frameMessageCount < 8) {
+          frameMessageCount += 1;
+          debug('frame-video-state', event.data);
         }
-        this.addEventListener('pointerover', VodLinkLiteYouTube.warmConnections, { once: true });
-        this.addEventListener('focusin', VodLinkLiteYouTube.warmConnections, { once: true });
-        this.addEventListener('click', () => {
-          dbg('lite-click', { videoId: this.videoId, active: activeId === this.videoId });
-          if (this.onUserActivate) this.onUserActivate();
-        });
+      });
+
+      function formatTime(seconds) {
+        const value = Math.max(0, Math.floor(Number(seconds) || 0));
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const secs = String(value % 60).padStart(2, '0');
+        return hours > 0
+          ? `${hours}:${String(minutes).padStart(2, '0')}:${secs}`
+          : `${minutes}:${secs}`;
       }
 
-      static addPrefetch(kind, url) {
-        const link = document.createElement('link');
-        link.rel = kind;
-        link.href = url;
-        document.head.append(link);
+      function showMessage(text, transient = false) {
+        if (messageTimer) {
+          clearTimeout(messageTimer);
+          messageTimer = null;
+        }
+        const clean = String(text || '').trim();
+        message.textContent = clean;
+        message.classList.toggle('visible', !!clean);
+        message.classList.toggle('transient', !!clean && transient);
+        if (clean && transient) {
+          messageTimer = setTimeout(() => {
+            message.classList.remove('visible', 'transient');
+            messageTimer = null;
+          }, 4200);
+        }
       }
 
-      static warmConnections() {
-        if (VodLinkLiteYouTube.preconnected) {
-          dbg('lite-preconnect-skip');
+      function validYouTubeId(value) {
+        return /^[A-Za-z0-9_-]{6,}$/.test(String(value || '').trim());
+      }
+
+      function bestQuality(levels) {
+        const available = Array.isArray(levels) ? levels : [];
+        return qualityRank.find(level => available.includes(level))
+          || available.find(level => level && level !== 'auto')
+          || '';
+      }
+
+      function applyPlaybackPreferences(target) {
+        if (!target) return;
+        try {
+          if (Number(target.getPlaybackRate?.()) !== 1) {
+            target.setPlaybackRate?.(1);
+          }
+        } catch (_) {}
+
+        try {
+          const levels = target.getAvailableQualityLevels?.() || [];
+          const best = bestQuality(levels);
+          if (best) {
+            target.setPlaybackQualityRange?.(best, best);
+            target.setPlaybackQuality?.(best);
+          }
+          const current = target.getPlaybackQuality?.() || 'unknown';
+          const snapshot = `${current}|${levels.join(',')}`;
+          if (snapshot !== lastQualityDebug) {
+            lastQualityDebug = snapshot;
+            debug('quality', { requested: best || 'adaptive', current, levels });
+          }
+        } catch (_) {}
+      }
+
+      function forceHighResolutionSurface() {
+        if (!lite || !lite.shadowRoot) return;
+        const iframe = lite.shadowRoot.querySelector('iframe');
+        if (!iframe) return;
+
+        const hostWidth = lite.clientWidth;
+        const hostHeight = lite.clientHeight;
+        if (hostWidth < 32 || hostHeight < 32) {
+          requestAnimationFrame(forceHighResolutionSurface);
           return;
         }
-        dbg('lite-preconnect-start');
-        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://www.youtube-nocookie.com');
-        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://www.youtube.com');
-        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://i.ytimg.com');
-        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://s.ytimg.com');
-        VodLinkLiteYouTube.addPrefetch('preconnect', 'https://www.google.com');
-        VodLinkLiteYouTube.preconnected = true;
+
+        const virtualWidth = Math.max(3840, hostWidth);
+        const virtualHeight = virtualWidth * hostHeight / hostWidth;
+        const scale = hostWidth / virtualWidth;
+        iframe.style.setProperty('width', `${virtualWidth}px`, 'important');
+        iframe.style.setProperty('height', `${virtualHeight}px`, 'important');
+        iframe.style.setProperty('transform', `scale(${scale})`, 'important');
+        iframe.style.setProperty('transform-origin', 'top left', 'important');
+        iframe.style.setProperty('pointer-events', 'none', 'important');
+        iframe.setAttribute('tabindex', '-1');
+        iframe.blur();
+        lite.style.overflow = 'hidden';
       }
 
-      disconnectedCallback() {
-        if (this.posterTimer) {
-          window.clearInterval(this.posterTimer);
-          this.posterTimer = 0;
-        }
-        if (this.posterObjectUrl) {
-          try { URL.revokeObjectURL(this.posterObjectUrl); } catch (_) {}
-          this.posterObjectUrl = '';
-        }
-      }
-
-      posterRefreshToken() {
-        // YouTube often replaces the autogenerated thumbnail minutes after a
-        // live VOD ends. Keep the facade URL moving so Chromium/CDN cache does
-        // not freeze VodLink on the first rough generated poster.
-        return Math.floor(Date.now() / (5 * 60 * 1000));
-      }
-
-      posterUrl(path, webp) {
-        const base = webp ? 'https://i.ytimg.com/vi_webp/' : 'https://i.ytimg.com/vi/';
-        return `${base}${this.videoId}/${path}?vodlink=${this.posterRefreshToken()}`;
-      }
-
-      static async sha256Hex(blob) {
-        if (!window.crypto || !window.crypto.subtle) return '';
-        const digest = await window.crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
-        return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-      }
-
-      static imageInfo(url) {
+      function waitForYouTubeApi() {
         return new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-          img.onerror = reject;
-          img.src = url;
+          const deadline = Date.now() + 20000;
+          const timer = setInterval(() => {
+            if (window.YT && typeof window.YT.Player === 'function') {
+              clearInterval(timer);
+              resolve();
+              return;
+            }
+            if (Date.now() >= deadline) {
+              clearInterval(timer);
+              reject(new Error('YouTube IFrame API timed out'));
+            }
+          }, 50);
         });
       }
 
-      async probeImageOnly(url, validate) {
-        dbg('poster-image-probe-start', { videoId: this.videoId, url });
-        const info = await VodLinkLiteYouTube.imageInfo(url);
-        dbg('poster-image-probe-info', { videoId: this.videoId, width: info.width, height: info.height });
-        if (validate && !validate(info)) {
-          dbg('poster-image-probe-rejected', { videoId: this.videoId, width: info.width, height: info.height });
-          return false;
+      function updateToggle(state) {
+        const playing = window.YT && state === window.YT.PlayerState.PLAYING;
+        toggle.textContent = playing ? '\u275a\u275a' : '\u25b6';
+      }
+
+      function handlePlayerState(event) {
+        const state = event ? event.data : -1;
+        updateToggle(state);
+        debug('state', { state });
+
+        if (window.YT && state === window.YT.PlayerState.PLAYING) {
+          endFreezeInProgress = false;
+          showMessage('');
+          setTimeout(() => {
+            try {
+              if (player && player.getPlayerState() === window.YT.PlayerState.PLAYING) {
+                root.classList.add('player-visible');
+              }
+            } catch (_) {}
+          }, 300);
+          return;
         }
-        if (this.posterRawUrl === url) {
-          dbg('poster-image-unchanged-url', { videoId: this.videoId });
-          return false;
+
+        if (window.YT && state === window.YT.PlayerState.ENDED && !endFreezeInProgress) {
+          endFreezeInProgress = true;
+          const duration = Math.max(0, Number(event.target.getDuration?.()) || lastDuration);
+          const finalFrame = Math.max(0, duration - 0.05);
+          try {
+            event.target.seekTo(finalFrame, false);
+            event.target.pauseVideo();
+            lastTime = finalFrame;
+            if (!scrubbing) {
+              timeline.max = String(Math.max(1, duration));
+              timeline.value = String(finalFrame);
+              timeLabel.textContent = `${formatTime(finalFrame)} / ${formatTime(duration)}`;
+            }
+          } catch (_) {}
         }
-        this.applyPosterUrl(url, '', false);
+      }
+
+      function startReporting() {
+        if (reportTimer) return;
+        reportTimer = setInterval(() => {
+          if (!playerReady || !player) return;
+          try {
+            lastTime = Math.max(0, Number(player.getCurrentTime?.()) || 0);
+            lastDuration = Math.max(0, Number(player.getDuration?.()) || 0);
+            if (!scrubbing) {
+              timeline.max = String(Math.max(1, lastDuration));
+              timeline.value = String(lastTime);
+              timeLabel.textContent = `${formatTime(lastTime)} / ${formatTime(lastDuration)}`;
+            }
+            if (bridge && bridge.onTimeUpdate) bridge.onTimeUpdate(lastTime);
+            applyPlaybackPreferences(player);
+          } catch (error) {
+            debug('time-report-error', { message: String(error) });
+          }
+        }, 250);
+      }
+
+      function applyPendingLoad() {
+        if (!playerReady || !player || !pendingLoad) return;
+        const request = pendingLoad;
+        pendingLoad = null;
+        endFreezeInProgress = false;
+        showMessage('');
+
+        try {
+          if (currentVideoId !== request.videoId) {
+            currentVideoId = request.videoId;
+            player.loadVideoById({
+              videoId: request.videoId,
+              startSeconds: request.seek,
+              suggestedQuality: 'highres',
+            });
+          } else {
+            player.seekTo(request.seek, true);
+            player.playVideo();
+          }
+          applyPlaybackPreferences(player);
+          debug('load-applied', request);
+        } catch (error) {
+          debug('load-error', { message: String(error), request });
+          showMessage('Could not start this YouTube VOD.');
+        }
+      }
+
+      async function attachYouTubePlayer() {
+        if (attachPromise) return attachPromise;
+        attachPromise = (async () => {
+          await waitForYouTubeApi();
+          const iframe = lite && lite.shadowRoot
+            ? lite.shadowRoot.querySelector('iframe')
+            : null;
+          if (!iframe) throw new Error('lite-youtube did not create its iframe');
+
+          forceHighResolutionSurface();
+          resizeObserver = new ResizeObserver(forceHighResolutionSurface);
+          resizeObserver.observe(lite);
+
+          player = new window.YT.Player(iframe, {
+            events: {
+              onReady(event) {
+                player = event.target;
+                playerReady = true;
+                document.body.tabIndex = -1;
+                document.body.focus({ preventScroll: true });
+                applyPlaybackPreferences(player);
+                startReporting();
+                applyPendingLoad();
+                debug('ready');
+              },
+              onStateChange: handlePlayerState,
+              onError(event) {
+                debug('youtube-error', { code: event ? event.data : 'unknown' });
+                showMessage(`YouTube player error ${event ? event.data : 'unknown'}.`);
+              },
+              onAutoplayBlocked() {
+                debug('autoplay-blocked');
+                showMessage('Click the video to start playback.', true);
+              },
+            },
+          });
+        })().catch(error => {
+          attachPromise = null;
+          debug('attach-error', { message: String(error) });
+          showMessage('The YouTube player could not be loaded.');
+          throw error;
+        });
+        return attachPromise;
+      }
+
+      async function createLitePlayer(videoId, seek) {
+        await customElements.whenDefined('lite-youtube');
+        if (lite) return;
+
+        // Qt WebEngine 6.8/6.9 embeds Chromium versions where credentialless
+        // YouTube frames never advance their media element past HAVE_NOTHING.
+        // Keep the actual lite-youtube component, but use its normal credential
+        // mode just like the successful native-browser proof.
+        const liteType = customElements.get('lite-youtube');
+        const isNativeWebView2 = !!(window.chrome && window.chrome.webview);
+        if (!isNativeWebView2
+            && liteType
+            && !liteType.prototype.vodlinkCredentialModePatched) {
+          const generateIframe = liteType.prototype.generateIframe;
+          liteType.prototype.generateIframe = function (...args) {
+            return generateIframe.apply(this, args).replace(' credentialless', '');
+          };
+          liteType.prototype.vodlinkCredentialModePatched = true;
+        }
+
+        lite = document.createElement('lite-youtube');
+        lite.id = 'vod';
+        lite.setAttribute('videoid', videoId);
+        lite.setAttribute('videotitle', 'VodLink VOD');
+        lite.setAttribute('videoplay', 'Play VOD');
+        lite.setAttribute('posterquality', 'maxresdefault');
+        lite.setAttribute('videoStartAt', String(Math.max(0, Math.floor(seek))));
+        lite.setAttribute('disablenoscript', '');
+        lite.setAttribute(
+          'params',
+          'autoplay=1&controls=0&enablejsapi=1&playsinline=1&rel=0&fs=0'
+          + '&cc_load_policy=0&iv_load_policy=3&disablekb=1&showinfo=0'
+          + '&modestbranding=1&vq=hd2160'
+          + '&origin=https%3A%2F%2Fvodlink.app'
+          + '&widget_referrer=https%3A%2F%2Fvodlink.app%2F'
+        );
+        lite.addEventListener('liteYoutubeIframeLoaded', () => {
+          debug('lite-iframe-loaded');
+          attachYouTubePlayer().catch(() => {});
+        }, { once: true });
+        stage.appendChild(lite);
+        currentVideoId = videoId;
+        lite.addIframe();
+      }
+
+      async function loadVideo(videoId, seek) {
+        const cleanId = String(videoId || '').trim();
+        const cleanSeek = Math.max(0, Number(seek) || 0);
+        if (!validYouTubeId(cleanId)) {
+          showMessage('This VOD has an invalid YouTube id.');
+          return;
+        }
+
+        pendingLoad = { videoId: cleanId, seek: cleanSeek };
+        debug('load-requested', pendingLoad);
+        if (!lite) {
+          showMessage('Loading YouTube player...');
+          try {
+            await createLitePlayer(cleanId, cleanSeek);
+          } catch (error) {
+            debug('create-error', { message: String(error) });
+          }
+          return;
+        }
+        applyPendingLoad();
+      }
+
+      function seek(seconds) {
+        const target = Math.max(0, Number(seconds) || 0);
+        if (!playerReady || !player) return;
+        try {
+          player.seekTo(target, true);
+          player.playVideo();
+        } catch (_) {}
+      }
+
+      function play() {
+        if (!playerReady || !player) return;
+        try {
+          root.classList.remove('player-visible');
+          player.playVideo();
+        } catch (_) {}
+      }
+
+      function pause() {
+        if (!playerReady || !player) return;
+        try { player.pauseVideo(); } catch (_) {}
+      }
+
+      function togglePlayback() {
+        if (!playerReady || !player || !window.YT) return;
+        try {
+          if (player.getPlayerState() === window.YT.PlayerState.PLAYING) {
+            player.pauseVideo();
+          } else {
+            root.classList.remove('player-visible');
+            player.playVideo();
+          }
+        } catch (_) {}
+      }
+
+      interactionShield.addEventListener('click', togglePlayback);
+      toggle.addEventListener('click', togglePlayback);
+      document.addEventListener('contextmenu', event => event.preventDefault(), true);
+
+      timeline.addEventListener('pointerdown', event => {
+        scrubbing = true;
+        try { timeline.setPointerCapture(event.pointerId); } catch (_) {}
+      });
+      timeline.addEventListener('input', () => {
+        if (!scrubbing) scrubbing = true;
+        timeLabel.textContent = `${formatTime(timeline.value)} / ${formatTime(timeline.max)}`;
+      });
+
+      function commitTimelineSeek(event) {
+        if (!scrubbing) return;
+        scrubbing = false;
+        if (event && typeof event.pointerId === 'number') {
+          try { timeline.releasePointerCapture(event.pointerId); } catch (_) {}
+        }
+        seek(Number(timeline.value));
+      }
+
+      timeline.addEventListener('pointerup', commitTimelineSeek);
+      timeline.addEventListener('pointercancel', () => { scrubbing = false; });
+      timeline.addEventListener('change', commitTimelineSeek);
+
+      window.vodlink = {
+        loadVideo,
+        seek,
+        play,
+        pause,
+        toggle: togglePlayback,
+        message(text) {
+          const clean = String(text || '').trim();
+          const persistent = /^select a vod/i.test(clean);
+          showMessage(clean, !persistent);
+        },
+        cacheVideos() {
+          // A single controllable iframe is deliberately reused across POVs.
+          // YouTube's loadVideoById keeps switches authoritative and avoids
+          // multiple simultaneous decoders.
+        },
+      };
+
+      window.addEventListener('error', event => {
+        debug('window-error', {
+          message: event.message,
+          source: event.filename,
+          line: event.lineno,
+        });
+      });
+      window.addEventListener('unhandledrejection', event => {
+        debug('unhandled-rejection', { reason: String(event.reason) });
+      });
+
+      function finishQtConnection(channel) {
+        bridge = channel.objects.bridge;
+        bridge.loadRequested.connect(window.vodlink.loadVideo);
+        bridge.seekRequested.connect(window.vodlink.seek);
+        bridge.playRequested.connect(window.vodlink.play);
+        bridge.pauseRequested.connect(window.vodlink.pause);
+        bridge.messageRequested.connect(window.vodlink.message);
+        bridge.cacheRequested.connect(window.vodlink.cacheVideos);
+        bridge.ready();
+        debug('bridge-ready');
+      }
+
+      function connectNativeWebView2() {
+        if (!(window.chrome && window.chrome.webview)) return false;
+
+        const post = payload => {
+          try { window.chrome.webview.postMessage(payload); } catch (_) {}
+        };
+        bridge = {
+          ready() { post({ type: 'ready' }); },
+          onTimeUpdate(seconds) { post({ type: 'time', seconds }); },
+          debugLog(category, text) { post({ type: 'debug', category, text }); },
+        };
+        window.chrome.webview.addEventListener('message', event => {
+          const request = event.data || {};
+          switch (request.command) {
+            case 'load':
+              window.vodlink.loadVideo(request.videoId, request.seek);
+              break;
+            case 'seek':
+              window.vodlink.seek(request.seconds);
+              break;
+            case 'play':
+              window.vodlink.play();
+              break;
+            case 'pause':
+              window.vodlink.pause();
+              break;
+            case 'message':
+              window.vodlink.message(request.text);
+              break;
+            case 'cache':
+              window.vodlink.cacheVideos(request.videoIds);
+              break;
+          }
+        });
+        bridge.ready();
+        debug('webview2-bridge-ready');
         return true;
       }
 
-      applyPosterUrl(url, hash, objectUrl) {
-        dbg('poster-apply', { videoId: this.videoId, objectUrl: !!objectUrl, hash: hash ? hash.slice(0, 12) : '', url: objectUrl ? '<object-url>' : url });
-        if (this.posterObjectUrl && this.posterObjectUrl !== url) {
-          try { URL.revokeObjectURL(this.posterObjectUrl); } catch (_) {}
-        }
-        this.posterObjectUrl = objectUrl ? url : '';
-        this.posterRawUrl = objectUrl ? '' : url;
-        this.posterHash = hash || this.posterHash || '';
-        this.style.backgroundImage = `url("${url}")`;
-      }
-
-      async probeAndApplyPoster(url, validate) {
-        dbg('poster-probe-start', { videoId: this.videoId, url });
-        const response = await fetch(url, { cache: 'reload', mode: 'cors' });
-        if (!response.ok) throw new Error(`thumbnail http ${response.status}`);
-        const blob = await response.blob();
-        dbg('poster-probe-response', { videoId: this.videoId, status: response.status, size: blob.size, type: blob.type });
-        if (blob.size > 2 * 1024 * 1024) throw new Error('thumbnail too large');
-
-        const hash = await VodLinkLiteYouTube.sha256Hex(blob);
-        if (hash && this.posterHash && hash === this.posterHash) {
-          dbg('poster-unchanged', { videoId: this.videoId, hash: hash.slice(0, 12) });
-          return false;
-        }
-
-        const objectUrl = URL.createObjectURL(blob);
-        try {
-          if (validate) {
-            const info = await VodLinkLiteYouTube.imageInfo(objectUrl);
-            dbg('poster-validate-info', { videoId: this.videoId, width: info.width, height: info.height });
-            if (!validate(info)) {
-              dbg('poster-validate-rejected', { videoId: this.videoId, width: info.width, height: info.height });
-              URL.revokeObjectURL(objectUrl);
-              return false;
-            }
+      function connectQtWebChannel() {
+        const script = document.createElement('script');
+        script.src = 'qrc:///qtwebchannel/qwebchannel.js';
+        script.onload = () => {
+          if (!window.qt || !qt.webChannelTransport || !window.QWebChannel) {
+            showMessage('VodLink could not connect to the player.');
+            return;
           }
-          this.applyPosterUrl(objectUrl, hash, true);
-          return true;
-        } catch (error) {
-          URL.revokeObjectURL(objectUrl);
-          throw error;
-        }
-      }
-
-      refreshPoster(upgrade) {
-        if (!this.videoId || this.classList.contains('lyt-activated')) {
-          dbg('poster-refresh-skip', { videoId: this.videoId, upgrade, activated: this.classList.contains('lyt-activated') });
-          return;
-        }
-        dbg('poster-refresh-start', { videoId: this.videoId, upgrade });
-        const fallbackUrl = this.posterUrl('hqdefault.jpg', false);
-        this.probeAndApplyPoster(fallbackUrl).then((changed) => {
-          if (upgrade && changed) this.upgradePosterImage();
-        }).catch((error) => {
-          dbg('poster-refresh-error', { videoId: this.videoId, error });
-          // Some Chromium builds/CDNs may block JS reads of thumbnail bytes. Keep
-          // first paint working, but do not blindly replace an already shown poster.
-          if (!this.posterHash && !this.posterObjectUrl && !this.posterRawUrl) {
-            this.applyPosterUrl(fallbackUrl, '', false);
-            if (upgrade) this.upgradePosterImage();
-          }
-        });
-      }
-
-      upgradePosterImage() {
-        setTimeout(() => {
-          const webpUrl = this.posterUrl('sddefault.webp', true);
-          // i.ytimg.com sometimes allows byte reads for jpg but blocks webp with
-          // CORS. For the optional upgraded poster, use an image probe instead
-          // of fetch+hash so -debug does not get filled with CORS errors.
-          this.probeImageOnly(webpUrl, (info) => !(info.width === 120 && info.height === 90)).catch((error) => {
-            dbg('poster-image-probe-error', { videoId: this.videoId, error });
-          });
-        }, 100);
-      }
-
-      destroyPlayer() {
-        dbg('lite-destroy-player', { videoId: this.videoId, hasPlayer: !!this.player });
-        if (this.player && this.player.destroy) {
-          try { this.player.destroy(); } catch (_) {}
-        }
-        this.player = null;
-        this.playerPromise = null;
-        this.classList.remove('lyt-activated');
-        for (const node of Array.from(this.querySelectorAll('.lyt-player'))) {
-          try { node.remove(); } catch (_) {}
-        }
-      }
-
-      async getYTPlayer(start, handlers) {
-        if (this.playerPromise) {
-          dbg('yt-player-promise-reused', { videoId: this.videoId, start });
-          return this.playerPromise;
-        }
-        dbg('yt-player-create-start', { videoId: this.videoId, start });
-        this.classList.add('lyt-activated');
-        VodLinkLiteYouTube.warmConnections();
-        await loadYouTubeApi();
-        const holder = document.createElement('div');
-        holder.className = 'lyt-player';
-        this.appendChild(holder);
-        const playerVars = {
-          autoplay: 1,
-          controls: 1,
-          rel: 0,
-          modestbranding: 1,
-          playsinline: 1,
-          enablejsapi: 1,
-          iv_load_policy: 3,
-          fs: 1,
-          origin: appOrigin,
-          widget_referrer: appOrigin + '/',
-          start: Math.max(0, Math.floor(Number(start || 0))),
+          new QWebChannel(qt.webChannelTransport, finishQtConnection);
         };
-        dbg('yt-player-vars', { videoId: this.videoId, host: youtubePlayerHost, playerVars });
-        this.playerPromise = new Promise((resolve) => {
-          this.player = new YT.Player(holder, {
-            host: youtubePlayerHost,
-            width: '100%',
-            height: '100%',
-            videoId: this.videoId,
-            playerVars,
-            events: {
-              onReady: (event) => {
-                dbg('yt-player-ready', { videoId: this.videoId });
-                resolve(event.target);
-                if (handlers && handlers.onReady) handlers.onReady(event);
-              },
-              onStateChange: (event) => {
-                dbg('yt-player-state', { videoId: this.videoId, state: event && event.data });
-                if (handlers && handlers.onStateChange) handlers.onStateChange(event);
-              },
-              onError: (event) => {
-                dbg('yt-player-error-event', { videoId: this.videoId, code: event && event.data });
-                if (handlers && handlers.onError) handlers.onError(event);
-              },
-              onAutoplayBlocked: () => {
-                dbg('yt-player-autoplay-blocked', { videoId: this.videoId });
-                if (handlers && handlers.onAutoplayBlocked) handlers.onAutoplayBlocked();
-              },
-            },
-          });
-        });
-        return this.playerPromise;
-      }
-    }
-
-    if (!customElements.get('vodlink-lite-youtube')) {
-      customElements.define('vodlink-lite-youtube', VodLinkLiteYouTube);
-    }
-
-    function showOverlay(text) {
-      dbg('overlay', { text: text || '' });
-      const o = document.getElementById('overlay');
-      if (text) { o.textContent = text; o.style.display = 'grid'; }
-      else { o.style.display = 'none'; }
-    }
-
-    function normalizeIds(ids) {
-      if (!ids) return [];
-      if (Array.isArray(ids)) return ids.map(String).filter(Boolean);
-      if (typeof ids === 'string') return ids.split(',').map(s => s.trim()).filter(Boolean);
-      try { return Array.from(ids).map(String).filter(Boolean); } catch (_) { return []; }
-    }
-
-    function validYouTubeId(videoId) {
-      return /^[A-Za-z0-9_-]{6,}$/.test(String(videoId || '').trim());
-    }
-
-    function slotFor(videoId) {
-      return players.get(videoId) || null;
-    }
-
-    function makeLiteSlot(videoId) {
-      let slot = slotFor(videoId);
-      if (slot) {
-        dbg('slot-reuse', { videoId });
-        return slot;
-      }
-      dbg('slot-create', { videoId });
-      const div = document.createElement('div');
-      div.className = 'playerSlot';
-      div.id = 'yt-slot-' + (nextSlot++);
-      const element = document.createElement('vodlink-lite-youtube');
-      element.setAttribute('videoid', videoId);
-      element.setAttribute('playlabel', 'Play VOD');
-      element.onUserActivate = () => {
-        if (activeId === videoId) {
-          seekAndPlay(videoId, slot.pendingSeek || 0);
-        } else {
-          doLoad(videoId, slot.pendingSeek || 0, false);
-        }
-      };
-      div.appendChild(element);
-      document.getElementById('players').appendChild(div);
-      slot = {
-        element, div, player: null, ready: false, pendingSeek: 0, lastUsed: Date.now(),
-        raw: false, rawStartedAt: 0, rawBaseSeek: 0, rawPaused: false, iframe: null,
-      };
-      players.set(videoId, slot);
-      evictCache();
-      return slot;
-    }
-
-    function destroyPlayer(videoId, keepFacade) {
-      const slot = slotFor(videoId);
-      if (!slot) {
-        dbg('slot-destroy-missing', { videoId, keepFacade });
-        return;
-      }
-      dbg('slot-destroy', { videoId, keepFacade, raw: slot.raw, ready: slot.ready, hasPlayer: !!slot.player });
-      try { if (slot.element && slot.element.destroyPlayer) slot.element.destroyPlayer(); } catch (_) {}
-      slot.player = null;
-      slot.ready = false;
-      slot.raw = false;
-      slot.rawStartedAt = 0;
-      slot.rawBaseSeek = 0;
-      slot.rawPaused = false;
-      slot.iframe = null;
-      if (!keepFacade) {
-        try { if (slot.div) slot.div.remove(); } catch (_) {}
-        players.delete(videoId);
-        if (activeId === videoId) activeId = '';
-      }
-    }
-
-    function evictCache() {
-      if (players.size <= maxCachedPlayers) return;
-      const candidates = Array.from(players.entries())
-        .filter(([id]) => id !== activeId)
-        .sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
-      while (players.size > maxCachedPlayers && candidates.length) {
-        const [id] = candidates.shift();
-        dbg('slot-evict', { videoId: id, players: players.size });
-        destroyPlayer(id, false);
-      }
-    }
-
-    function rawEmbedUrl(videoId, seek) {
-      const qs = new URLSearchParams({
-        autoplay: '1',
-        controls: '1',
-        rel: '0',
-        modestbranding: '1',
-        playsinline: '1',
-        fs: '1',
-        start: String(Math.max(0, Math.floor(seek || 0))),
-      });
-      return 'https://www.youtube.com/embed/' + encodeURIComponent(videoId) + '?' + qs.toString();
-    }
-
-    function createRawIframe(videoId, seek) {
-      dbg('lite-iframe-create', { videoId, seek, srcHost: 'www.youtube.com', jsApi: false });
-      const slot = makeLiteSlot(videoId);
-      destroyPlayer(videoId, true);
-      slot.raw = true;
-      slot.ready = true;
-      slot.pendingSeek = Math.max(0, Number(seek || 0));
-      slot.rawBaseSeek = slot.pendingSeek;
-      slot.rawStartedAt = Date.now();
-      slot.rawPaused = false;
-
-      slot.element.classList.add('lyt-activated');
-      const iframe = document.createElement('iframe');
-      iframe.className = 'lyt-player';
-      iframe.src = rawEmbedUrl(videoId, slot.pendingSeek);
-      iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
-      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-      iframe.allowFullscreen = true;
-      iframe.onload = () => dbg('lite-iframe-load', { videoId, seek: slot.pendingSeek });
-      slot.iframe = iframe;
-      slot.element.appendChild(iframe);
-      setActive(videoId);
-      showOverlay(null);
-      startReporting();
-      return slot;
-    }
-
-    function setActive(videoId) {
-      dbg('set-active', { videoId, cachedPlayers: players.size });
-      players.forEach((slot, id) => {
-        if (id === videoId) {
-          slot.div.classList.add('active');
-        } else {
-          slot.div.classList.remove('active');
-          if (slot.raw && !slot.rawPaused) {
-            const elapsed = Math.max(0, Date.now() - (slot.rawStartedAt || Date.now())) / 1000.0;
-            slot.rawBaseSeek = (slot.rawBaseSeek || slot.pendingSeek || 0) + elapsed;
-            slot.pendingSeek = slot.rawBaseSeek;
-            slot.rawPaused = true;
-            if (slot.iframe) { try { slot.iframe.remove(); } catch (_) {} slot.iframe = null; }
-            slot.element.classList.remove('lyt-activated');
-            dbg('lite-iframe-freeze-inactive', { videoId: id, seek: slot.rawBaseSeek });
-          }
-          try { if (slot.player) slot.player.pauseVideo(); } catch (_) {}
-        }
-      });
-      activeId = videoId;
-    }
-
-    async function ensurePlayer(videoId, seek) {
-      const slot = makeLiteSlot(videoId);
-      slot.pendingSeek = Math.max(0, Number(seek || 0));
-      slot.lastUsed = Date.now();
-      dbg('ensure-player', { videoId, seek: slot.pendingSeek, rawDefault: useRawIframeByDefault, raw: slot.raw, ready: slot.ready, hasPlayer: !!slot.player });
-      if (useRawIframeByDefault || slot.raw) {
-        createRawIframe(videoId, slot.pendingSeek);
-        return slot;
-      }
-      if (slot.ready && slot.player) {
-        dbg('ensure-player-ready-cache-hit', { videoId });
-        return slot;
-      }
-      showOverlay('Loading YouTube player...');
-      try {
-        const player = await slot.element.getYTPlayer(slot.pendingSeek, {
-          onReady: function (event) {
-            dbg('handler-on-ready', { videoId });
-            slot.player = event.target;
-            slot.ready = true;
-            if (activeId === videoId) {
-              seekAndPlay(videoId, slot.pendingSeek || 0);
-            }
-          },
-          onStateChange: function (event) { onStateChange(videoId, event); },
-          onError: function (event) { onPlayerError(videoId, event); },
-          onAutoplayBlocked: onAutoplayBlocked,
-        });
-        slot.player = player;
-        slot.ready = true;
-        dbg('ensure-player-success', { videoId });
-      } catch (error) {
-        dbg('ensure-player-exception', { videoId, error });
-        destroyPlayer(videoId, true);
-        showOverlay('YouTube JS player failed inside the app. Check VodLink-debug.txt for LiteYouTube logs.');
-      }
-      return slot;
-    }
-
-    async function seekAndPlay(videoId, seek) {
-      dbg('seek-and-play-start', { videoId, seek });
-      const slot = slotFor(videoId);
-      if (!slot) { dbg('seek-and-play-missing-slot', { videoId }); return; }
-      slot.lastUsed = Date.now();
-      const start = Math.max(0, Number(seek || 0));
-      slot.pendingSeek = start;
-      if (slot.raw) {
-        createRawIframe(videoId, start);
-        return;
-      }
-      if (!slot.ready || !slot.player) {
-        await ensurePlayer(videoId, start);
-      }
-      if (!slot.player || !slot.player.seekTo) {
-        dbg('seek-and-play-no-js-player', { videoId, ready: slot.ready, hasPlayer: !!slot.player });
-        return;
-      }
-      try {
-        if (slot.player && slot.player.seekTo) {
-          dbg('seek-and-play-call', { videoId, start });
-          if (start > 0.05) {
-            slot.player.seekTo(start, true);
-          }
-          slot.player.playVideo();
-          startReporting();
-          showOverlay(null);
-        }
-      } catch (error) {
-        dbg('seek-and-play-exception', { videoId, error });
-        showOverlay('Could not control this VOD inside the app. Check VodLink-debug.txt.');
-      }
-    }
-
-    function onAutoplayBlocked() {
-      dbg('autoplay-blocked');
-      showOverlay('Click the player to start playback. The embedded browser blocked autoplay with audio.');
-    }
-
-    function onPlayerError(videoId, e) {
-      const code = e && typeof e.data !== 'undefined' ? String(e.data) : 'unknown';
-      dbg('player-error', { videoId, code, active: videoId === activeId, retryCount });
-      if (videoId !== activeId) {
-        destroyPlayer(videoId, true);
-        return;
+        script.onerror = () => showMessage('VodLink could not load its player bridge.');
+        document.head.appendChild(script);
       }
 
-      if (lastLoad && retryCount < 3) {
-        retryCount += 1;
-        const waitMs = code === '5' || code === '153' ? 900 : 2500;
-        showOverlay('YouTube JS player error ' + code + '. Rebuilding lite player attempt '
-          + retryCount + '/3...');
-        destroyPlayer(videoId, true);
-        if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(() => {
-          retryTimer = null;
-          if (lastLoad) doLoad(lastLoad.videoId, lastLoad.seek, true);
-        }, waitMs);
-        return;
+      if (!connectNativeWebView2()) {
+        connectQtWebChannel();
       }
-      showOverlay('YouTube JS player failed with error ' + code + '. Check VodLink-debug.txt for LiteYouTube logs.');
-    }
-
-    function onStateChange(videoId, e) {
-      dbg('state-change', { videoId, state: e && e.data, active: videoId === activeId });
-      if (videoId !== activeId || !window.YT) return;
-      if (e.data === YT.PlayerState.PLAYING) {
-        retryCount = 0;
-        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-        showOverlay(null);
-        startReporting();
-      } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
-        stopReporting();
-      }
-    }
-
-    function startReporting() {
-      if (reportTimer) return;
-      dbg('reporting-start', { activeId });
-      reportTimer = setInterval(() => {
-        const slot = slotFor(activeId);
-        if (!bridge || !slot) return;
-        if (slot.raw) {
-          const elapsed = slot.rawPaused ? 0 : Math.max(0, Date.now() - (slot.rawStartedAt || Date.now())) / 1000.0;
-          const estimate = (slot.rawBaseSeek || slot.pendingSeek || 0) + elapsed;
-          try { bridge.onTimeUpdate(estimate); } catch (_) {}
-          return;
-        }
-        if (slot.player && slot.player.getCurrentTime) {
-          try { bridge.onTimeUpdate(slot.player.getCurrentTime() || 0); } catch (_) {}
-        }
-      }, 200);
-    }
-    function stopReporting() {
-      if (reportTimer) {
-        dbg('reporting-stop', { activeId });
-        clearInterval(reportTimer); reportTimer = null;
-      }
-    }
-
-    async function doLoad(videoId, seek, isRetry) {
-      dbg('do-load-start', { videoId, seek, isRetry });
-      videoId = String(videoId || '').trim();
-      if (!videoId) { dbg('do-load-empty-id'); showOverlay('Select a VOD to watch'); return; }
-      if (!validYouTubeId(videoId)) { dbg('do-load-invalid-id', { videoId }); showOverlay('This VOD has an invalid YouTube id.'); return; }
-      const start = Math.max(0, Number(seek || 0));
-      if (!bridge) {
-        dbg('do-load-pending-bridge', { videoId, seek: start });
-        pendingLoad = { videoId, seek: start };
-        return;
-      }
-      if (!isRetry) {
-        retryCount = 0;
-        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-      }
-      lastLoad = { videoId, seek: start };
-      const slot = makeLiteSlot(videoId);
-      slot.pendingSeek = start;
-      setActive(videoId);
-      const wasAlreadyReady = !!(slot.ready && slot.player);
-      await ensurePlayer(videoId, start);
-      if (wasAlreadyReady) {
-        seekAndPlay(videoId, start);
-      }
-    }
-
-    function cacheVideos(ids) {
-      const unique = Array.from(new Set(normalizeIds(ids))).filter(validYouTubeId);
-      dbg('cache-videos', { requested: ids, unique });
-      for (const id of unique) {
-        makeLiteSlot(id);
-      }
-      pendingCache = unique;
-    }
-
-    async function logMediaCodecCapabilities() {
-      const video = document.createElement('video');
-      const codecs = [
-        { name: 'avc1-main', contentType: 'video/mp4; codecs="avc1.4d401f"' },
-        { name: 'avc1-high', contentType: 'video/mp4; codecs="avc1.640028"' },
-        { name: 'vp9-8bit', contentType: 'video/webm; codecs="vp09.00.41.08"' },
-        { name: 'vp9-10bit', contentType: 'video/webm; codecs="vp09.02.41.10"' },
-        { name: 'av1-8bit', contentType: 'video/mp4; codecs="av01.0.08M.08"' },
-        { name: 'av1-10bit', contentType: 'video/mp4; codecs="av01.0.08M.10"' },
-      ];
-      dbg('codec-can-play-type', {
-        video: Object.fromEntries(codecs.map(codec => [codec.name, video.canPlayType(codec.contentType)])),
-        audio: {
-          aac: video.canPlayType('audio/mp4; codecs="mp4a.40.2"'),
-          opus: video.canPlayType('audio/webm; codecs="opus"'),
-        },
-        mediaSource: typeof MediaSource !== 'undefined',
-        mediaCapabilities: !!(navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo),
-        userAgent: navigator.userAgent,
-      });
-
-      if (!navigator.mediaCapabilities || !navigator.mediaCapabilities.decodingInfo) return;
-      for (const codec of codecs) {
-        try {
-          const result = await navigator.mediaCapabilities.decodingInfo({
-            type: 'media-source',
-            video: {
-              contentType: codec.contentType,
-              width: 2560,
-              height: 1440,
-              bitrate: 16000000,
-              framerate: 60,
-            },
-          });
-          dbg('codec-decoding-info', {
-            codec: codec.name,
-            supported: result.supported,
-            smooth: result.smooth,
-            powerEfficient: result.powerEfficient,
-          });
-        } catch (error) {
-          dbg('codec-decoding-info-error', { codec: codec.name, error });
-        }
-      }
-    }
-
-    window.vodlink = {
-      loadVideo: function (videoId, seek) { doLoad(videoId, seek, false); },
-      seek: function (seconds) { seekAndPlay(activeId, Math.max(0, Number(seconds || 0))); },
-      play: function () {
-        const s = slotFor(activeId);
-        if (s && s.raw && s.rawPaused) {
-          createRawIframe(activeId, s.rawBaseSeek || s.pendingSeek || 0);
-          return;
-        }
-        if (s && s.player) s.player.playVideo();
-      },
-      pause: function () {
-        const s = slotFor(activeId);
-        if (s && s.raw) {
-          const elapsed = Math.max(0, Date.now() - (s.rawStartedAt || Date.now())) / 1000.0;
-          s.rawBaseSeek = (s.rawBaseSeek || s.pendingSeek || 0) + elapsed;
-          s.pendingSeek = s.rawBaseSeek;
-          s.rawStartedAt = Date.now();
-          s.rawPaused = true;
-          if (s.iframe) { try { s.iframe.remove(); } catch (_) {} s.iframe = null; }
-          dbg('lite-iframe-pause', { videoId: activeId, seek: s.rawBaseSeek });
-          stopReporting();
-          return;
-        }
-        if (s && s.player) s.player.pauseVideo();
-      },
-      message: function (text) { showOverlay(text); },
-      cacheVideos: cacheVideos,
-    };
-
-    dbg('qwebchannel-init-start');
-    new QWebChannel(qt.webChannelTransport, function (channel) {
-      bridge = channel.objects.bridge;
-      dbg('qwebchannel-ready', { hasBridge: !!bridge, pendingCache, pendingLoad });
-      logMediaCodecCapabilities();
-      if (bridge.loadRequested) bridge.loadRequested.connect(window.vodlink.loadVideo);
-      if (bridge.seekRequested) bridge.seekRequested.connect(window.vodlink.seek);
-      if (bridge.playRequested) bridge.playRequested.connect(window.vodlink.play);
-      if (bridge.pauseRequested) bridge.pauseRequested.connect(window.vodlink.pause);
-      if (bridge.messageRequested) bridge.messageRequested.connect(window.vodlink.message);
-      if (bridge.cacheRequested) bridge.cacheRequested.connect(window.vodlink.cacheVideos);
-      if (bridge.ready) bridge.ready();
-      cacheVideos(pendingCache);
-      if (pendingLoad) {
-        doLoad(pendingLoad.videoId, pendingLoad.seek, false);
-        pendingLoad = null;
-      }
-    });
+    })();
   </script>
 </body>
 </html>

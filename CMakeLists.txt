@@ -16,11 +16,68 @@ set(VODLINK_QT_COMPONENTS
     Sql
     Network
     NetworkAuth
-    WebChannel
-    WebEngineWidgets
 )
+if(NOT WIN32)
+    list(APPEND VODLINK_QT_COMPONENTS
+        WebChannel
+        WebEngineWidgets
+    )
+endif()
 find_package(Qt6 6.8 REQUIRED COMPONENTS ${VODLINK_QT_COMPONENTS})
 find_package(LibObs REQUIRED)
+
+if(WIN32)
+    set(VODLINK_WEBVIEW2_VERSION "1.0.4078.44")
+    set(VODLINK_WEBVIEW2_SHA256
+        "DC4D1D9168DF26B830398303E50210B6E1729F6CE5A7AC69D2C766852F489962")
+
+    if(DEFINED ENV{NUGET_PACKAGES} AND NOT "$ENV{NUGET_PACKAGES}" STREQUAL "")
+        set(_vodlink_nuget_root "$ENV{NUGET_PACKAGES}")
+    else()
+        set(_vodlink_nuget_root "$ENV{USERPROFILE}/.nuget/packages")
+    endif()
+    set(VODLINK_WEBVIEW2_ROOT
+        "${_vodlink_nuget_root}/microsoft.web.webview2/${VODLINK_WEBVIEW2_VERSION}")
+
+    if(NOT EXISTS "${VODLINK_WEBVIEW2_ROOT}/build/native/include/WebView2.h")
+        set(_vodlink_webview2_download_dir
+            "${CMAKE_CURRENT_BINARY_DIR}/_deps/webview2")
+        set(_vodlink_webview2_package
+            "${_vodlink_webview2_download_dir}/Microsoft.Web.WebView2.${VODLINK_WEBVIEW2_VERSION}.nupkg")
+        set(_vodlink_webview2_extract
+            "${_vodlink_webview2_download_dir}/package")
+        file(MAKE_DIRECTORY "${_vodlink_webview2_download_dir}")
+        if(NOT EXISTS "${_vodlink_webview2_package}")
+            file(DOWNLOAD
+                "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${VODLINK_WEBVIEW2_VERSION}"
+                "${_vodlink_webview2_package}"
+                EXPECTED_HASH "SHA256=${VODLINK_WEBVIEW2_SHA256}"
+                TLS_VERIFY ON
+                SHOW_PROGRESS
+                STATUS _vodlink_webview2_download_status)
+            list(GET _vodlink_webview2_download_status 0 _vodlink_webview2_download_code)
+            if(NOT _vodlink_webview2_download_code EQUAL 0)
+                list(GET _vodlink_webview2_download_status 1 _vodlink_webview2_download_message)
+                message(FATAL_ERROR
+                    "Could not download Microsoft WebView2 SDK: ${_vodlink_webview2_download_message}")
+            endif()
+        endif()
+        file(MAKE_DIRECTORY "${_vodlink_webview2_extract}")
+        file(ARCHIVE_EXTRACT
+            INPUT "${_vodlink_webview2_package}"
+            DESTINATION "${_vodlink_webview2_extract}")
+        set(VODLINK_WEBVIEW2_ROOT "${_vodlink_webview2_extract}")
+    endif()
+
+    set(VODLINK_WEBVIEW2_INCLUDE_DIR
+        "${VODLINK_WEBVIEW2_ROOT}/build/native/include")
+    set(VODLINK_WEBVIEW2_STATIC_LOADER
+        "${VODLINK_WEBVIEW2_ROOT}/build/native/x64/WebView2LoaderStatic.lib")
+    if(NOT EXISTS "${VODLINK_WEBVIEW2_STATIC_LOADER}")
+        message(FATAL_ERROR
+            "Microsoft WebView2 static loader was not found at ${VODLINK_WEBVIEW2_STATIC_LOADER}")
+    endif()
+endif()
 
 qt_standard_project_setup()
 
@@ -137,6 +194,14 @@ if(WIN32 AND VODLINK_OBS_RUNTIME_DIR AND EXISTS "${VODLINK_OBS_RUNTIME_DIR}")
     endif()
 endif()
 
+set(VODLINK_PLAYER_PLATFORM_SOURCES)
+if(WIN32)
+    list(APPEND VODLINK_PLAYER_PLATFORM_SOURCES
+        src/player/WebView2Player.cpp
+        src/player/WebView2Player.h
+    )
+endif()
+
 qt_add_executable(vodlink WIN32
     src/main.cpp
     src/app/AppController.cpp
@@ -173,6 +238,7 @@ qt_add_executable(vodlink WIN32
     src/player/PlayerBridge.h
     src/player/SyncPlayer.cpp
     src/player/SyncPlayer.h
+    ${VODLINK_PLAYER_PLATFORM_SOURCES}
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     resources/resources.qrc
@@ -181,6 +247,9 @@ qt_add_executable(vodlink WIN32
 )
 
 target_include_directories(vodlink PRIVATE src)
+if(WIN32)
+    target_include_directories(vodlink PRIVATE "${VODLINK_WEBVIEW2_INCLUDE_DIR}")
+endif()
 target_compile_definitions(vodlink PRIVATE
     VODLINK_BUILD_COMMIT="${VODLINK_BUILD_COMMIT}"
     VODLINK_RELEASE_TAG="${VODLINK_RELEASE_TAG}"
@@ -206,10 +275,14 @@ target_link_libraries(vodlink PRIVATE
     Qt6::Sql
     Qt6::Network
     Qt6::NetworkAuth
-    Qt6::WebChannel
-    Qt6::WebEngineWidgets
     LibObs::libobs
 )
+if(NOT WIN32)
+    target_link_libraries(vodlink PRIVATE
+        Qt6::WebChannel
+        Qt6::WebEngineWidgets
+    )
+endif()
 
 # macOS/Linux must be able to resolve libobs from the bundled app payload
 # before main() runs. Windows uses delay-load and explicit AddDllDirectory
@@ -226,7 +299,11 @@ elseif(UNIX)
 endif()
 
 if(WIN32)
-    target_link_libraries(vodlink PRIVATE user32 shell32 advapi32 dxgi dxguid delayimp)
+    target_link_libraries(vodlink PRIVATE
+        "${VODLINK_WEBVIEW2_STATIC_LOADER}"
+        user32 shell32 advapi32 dxgi dxguid delayimp
+        ole32 shlwapi version
+    )
     # obs.dll is deliberately delay-loaded. The app extracts its private OBS
     # runtime first, adds that runtime to the DLL search path, then the first
     # libobs call resolves against VodLink's copy only.

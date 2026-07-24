@@ -6,9 +6,13 @@
 #include <QWidget>
 
 class PlayerBridge;
+#if defined(Q_OS_WIN)
+class WebView2Player;
+#else
 class QWebChannel;
 class QWebEngineProfile;
 class QWebEngineView;
+#endif
 
 // Plays a "session group" of overlapping VODs (mine + friends') and lets you
 // switch between them while staying locked to the same real-world moment. Each
@@ -51,9 +55,13 @@ private:
     void loadCurrent(double offsetSeconds, const QString &note = {});
     [[nodiscard]] qint64 absolutePositionMs() const;
 
+#if defined(Q_OS_WIN)
+    WebView2Player *m_view = nullptr;
+#else
     QWebEngineProfile *m_profile = nullptr;
     QWebEngineView *m_view = nullptr;
     QWebChannel *m_channel = nullptr;
+#endif
     PlayerBridge *m_bridge = nullptr;
 
     QVector<Vod> m_group;
