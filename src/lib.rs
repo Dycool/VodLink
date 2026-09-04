@@ -18,7 +18,9 @@ mod streaming;
 mod web;
 mod youtube;
 
-use anyhow::{Context, Result};
+#[cfg(not(feature = "desktop"))]
+use anyhow::Context;
+use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
 pub fn run() -> Result<()> {
