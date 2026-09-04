@@ -7,9 +7,7 @@ use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::{Icon as WindowIcon, Window, WindowBuilder};
-use tray_icon::menu::{
-    CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem,
-};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{
     Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
@@ -100,8 +98,7 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
         let mut timer = tokio::time::interval(Duration::from_millis(750));
         loop {
             timer.tick().await;
-            let (auto_record, share_vods, recording, tooltip) =
-                state_controller.tray_state().await;
+            let (auto_record, share_vods, recording, tooltip) = state_controller.tray_state().await;
             if state_proxy
                 .send_event(UserEvent::TrayState {
                     auto_record,
@@ -139,21 +136,13 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                     window.set_visible(false);
                 } else if !quit_requested {
                     quit_requested = true;
-                    request_quit(
-                        runtime_handle.clone(),
-                        controller.clone(),
-                        tray.proxy.clone(),
-                    );
+                    request_quit(runtime_handle.clone(), controller.clone(), tray.proxy.clone());
                 }
             }
-            Event::UserEvent(UserEvent::Show) => {
-                show_window(&window);
-            }
+            Event::UserEvent(UserEvent::Show) => show_window(&window),
             Event::UserEvent(UserEvent::ShowSettings) => {
                 show_window(&window);
-                let _ = webview.evaluate_script(
-                    "document.querySelector('.nav[data-page=\"settings\"]')?.click();",
-                );
+                let _ = webview.evaluate_script("window.vodlinkOpenSettings?.();");
             }
             Event::UserEvent(UserEvent::Tray(event)) => match event {
                 TrayIconEvent::Click {
@@ -201,11 +190,7 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                 } else if event.id == tray.quit_id && !quit_requested {
                     quit_requested = true;
                     window.set_visible(false);
-                    request_quit(
-                        runtime_handle.clone(),
-                        controller.clone(),
-                        tray.proxy.clone(),
-                    );
+                    request_quit(runtime_handle.clone(), controller.clone(), tray.proxy.clone());
                 }
             }
             Event::UserEvent(UserEvent::TrayState {
@@ -228,9 +213,7 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                     let _ = icon.set_tooltip(Some(label));
                 }
             }
-            Event::UserEvent(UserEvent::Shutdown) => {
-                *control_flow = ControlFlow::Exit;
-            }
+            Event::UserEvent(UserEvent::Shutdown) => *control_flow = ControlFlow::Exit,
             _ => {}
         }
     });

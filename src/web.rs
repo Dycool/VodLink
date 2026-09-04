@@ -12,6 +12,8 @@ use std::sync::{Arc, OnceLock};
 const INDEX_HTML: &str = include_str!("../resources/web/index.html");
 const APP_JS: &str = include_str!("../resources/web/app.js");
 const STYLES_CSS: &str = include_str!("../resources/web/styles.css");
+const GOOGLE_SVG: &str = include_str!("../resources/google.svg");
+const VODLINK_PNG: &[u8] = include_bytes!("../resources/vodlink.png");
 pub(crate) const UI_ADDRESS: &str = "127.0.0.1:43861";
 
 type UiHandler = Arc<dyn Fn() + Send + Sync + 'static>;
@@ -76,12 +78,14 @@ pub(crate) fn ui_url() -> String {
     format!("http://{UI_ADDRESS}/")
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn register_show_window_handler(handler: UiHandler) -> Result<()> {
     SHOW_WINDOW_HANDLER
         .set(handler)
         .map_err(|_| anyhow::anyhow!("VodLink window handler was already registered"))
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn register_exit_handler(handler: UiHandler) -> Result<()> {
     EXIT_HANDLER
         .set(handler)
@@ -124,6 +128,8 @@ fn router(controller: Arc<AppController>) -> Router {
         .route("/", get(index))
         .route("/app.js", get(javascript))
         .route("/styles.css", get(styles))
+        .route("/google.svg", get(google_svg))
+        .route("/vodlink.png", get(vodlink_png))
         .route("/api/ping", get(ping))
         .route("/api/window/show", post(show_window))
         .route("/api/snapshot", get(snapshot))
@@ -197,6 +203,14 @@ async fn styles() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLES_CSS)
 }
 
+async fn google_svg() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/svg+xml")], GOOGLE_SVG)
+}
+
+async fn vodlink_png() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/png")], VODLINK_PNG)
+}
+
 async fn ping() -> Json<ApiMessage> {
     ApiMessage::ok("VodLink")
 }
@@ -255,7 +269,7 @@ async fn remove_friend(
     State(controller): State<Arc<AppController>>,
     Path(email): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    controller.remove_friend(&email).await?;
+    controller.remove_friend(&email)?;
     Ok(ApiMessage::ok("Friend removed"))
 }
 
