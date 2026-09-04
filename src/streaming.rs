@@ -256,7 +256,7 @@ fn add_video_source(
                 .context("OBS window_capture is unavailable")?;
             let mut source_settings = source_type.default_settings_mut()?;
             source_settings
-                .set_string("window", &window.obs_id)?
+                .set_string("window", window.obs_id.as_str())?
                 .set_int("priority", 2)?
                 .set_int("method", 2)?
                 .set_bool("cursor", true)?
