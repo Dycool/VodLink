@@ -269,7 +269,7 @@ async fn remove_friend(
     State(controller): State<Arc<AppController>>,
     Path(email): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    controller.remove_friend(&email)?;
+    controller.remove_friend(&email).await?;
     Ok(ApiMessage::ok("Friend removed"))
 }
 
