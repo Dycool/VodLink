@@ -21,7 +21,7 @@ libobs-simple = { git = "https://github.com/libobs-rs/libobs-rs", rev = "0f30618
 libobs-wrapper = { git = "https://github.com/libobs-rs/libobs-rs", rev = "0f306186d2f1414fb51e717fafd43f48cfce3114", version = "10.0.0", default-features = false, features = ["enable_runtime", "logging_crash_handler"], optional = true }
 rand = "0.9"
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form", "query"] }
 rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
