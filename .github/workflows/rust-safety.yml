@@ -1,0 +1,104 @@
+name: Rust safety
+
+on:
+  push:
+    branches: [rust-port]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy-and-core:
+    name: Policy, format, and safe core
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source without write credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: clippy,rustfmt
+
+      - name: Enforce first-party safety invariants
+        run: python3 scripts/check-rust-safety.py
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy first-party core
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+
+      - name: Test first-party core
+        run: cargo test --no-default-features --all-targets
+
+  miri:
+    name: Miri safe core
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source without write credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Miri nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-01
+          components: miri
+
+      - name: Prepare Miri
+        run: cargo +nightly-2026-09-01 miri setup
+
+      - name: Run Miri without native OBS dependency
+        run: cargo +nightly-2026-09-01 miri test --no-default-features --lib
+
+  windows-obs:
+    name: Windows OBS integration
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Check out source without write credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+
+      - name: Enforce first-party safety invariants
+        run: python scripts/check-rust-safety.py
+
+      - name: Install pinned OBS build helper
+        shell: pwsh
+        run: |
+          cargo install cargo-obs-build --git https://github.com/libobs-rs/libobs-rs --rev 0f306186d2f1414fb51e717fafd43f48cfce3114 --locked
+
+      - name: Stage OBS runtime for checks
+        shell: pwsh
+        run: |
+          cargo obs-build build --out-dir target/debug
+          cargo obs-build build --out-dir target/debug/deps
+
+      - name: Clippy all targets with OBS
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test all targets with OBS
+        run: cargo test --all-targets
+
+      - name: Build release application
+        shell: pwsh
+        run: |
+          cargo obs-build build --out-dir target/release
+          cargo build --release

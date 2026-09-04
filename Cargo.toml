@@ -1,0 +1,56 @@
+[package]
+name = "vodlink"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.98.1"
+description = "Automatic YouTube VOD capture and synchronized playback"
+license = "GPL-3.0-only"
+repository = "https://github.com/Dycool/VodLink"
+
+[features]
+default = ["obs"]
+obs = ["dep:libobs-simple", "dep:libobs-wrapper"]
+
+[dependencies]
+anyhow = "1.0"
+axum = { version = "0.8", features = ["json", "macros"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+libobs-simple = { git = "https://github.com/libobs-rs/libobs-rs", rev = "0f306186d2f1414fb51e717fafd43f48cfce3114", version = "9.0.0", optional = true }
+libobs-wrapper = { git = "https://github.com/libobs-rs/libobs-rs", rev = "0f306186d2f1414fb51e717fafd43f48cfce3114", version = "10.0.0", default-features = false, features = ["enable_runtime", "logging_crash_handler"], optional = true }
+rand = "0.9"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sysinfo = "0.39.6"
+tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "net", "process", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5"
+urlencoding = "2"
+webbrowser = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_unsafe = "forbid"
+unsafe_op_in_unsafe_fn = "forbid"
+
+[lints.clippy]
+transmute_ptr_to_ptr = "forbid"
+undocumented_unsafe_blocks = "forbid"
+allow_attributes = "forbid"
+allow_attributes_without_reason = "forbid"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[package.metadata.vodlink]
+libobs-rs-revision = "0f306186d2f1414fb51e717fafd43f48cfce3114"
+obs-version = "32.1.2"
