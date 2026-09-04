@@ -134,8 +134,9 @@ impl Default for AppStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum StreamState {
+    #[default]
     Idle,
     Preparing,
     Streaming,

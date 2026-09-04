@@ -178,7 +178,7 @@ impl YouTubeLiveClient {
                 }
             }
         }
-        vods.sort_by(|left, right| right.vod.started_at.cmp(&left.vod.started_at));
+        vods.sort_by_key(|item| std::cmp::Reverse(item.vod.started_at));
         Ok(vods)
     }
 

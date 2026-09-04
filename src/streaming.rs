@@ -10,13 +10,18 @@ use libobs_wrapper::utils::StartupInfo;
 use std::path::Path;
 use std::sync::mpsc;
 
-#[derive(Clone)]
-pub(crate) struct StreamerHandle {
-    sender: mpsc::Sender<StreamerCommand>,
+pub(crate) struct StreamRequest {
+    server: String,
+    stream_key: String,
+    capture_mode: CaptureMode,
+    audio_source: AudioCaptureSource,
+    process_hints: Vec<String>,
+    microphone: bool,
+    settings: RecorderSettings,
 }
 
-enum StreamerCommand {
-    Start {
+impl StreamRequest {
+    pub(crate) fn new(
         server: String,
         stream_key: String,
         capture_mode: CaptureMode,
@@ -24,6 +29,27 @@ enum StreamerCommand {
         process_hints: Vec<String>,
         microphone: bool,
         settings: RecorderSettings,
+    ) -> Self {
+        Self {
+            server,
+            stream_key,
+            capture_mode,
+            audio_source,
+            process_hints,
+            microphone,
+            settings,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct StreamerHandle {
+    sender: mpsc::Sender<StreamerCommand>,
+}
+
+enum StreamerCommand {
+    Start {
+        request: StreamRequest,
         reply: mpsc::Sender<Result<()>>,
     },
     Stop { reply: mpsc::Sender<Result<()>> },
@@ -38,8 +64,8 @@ impl StreamerHandle {
                 let mut streamer = RtmpStreamer::default();
                 while let Ok(command) = receiver.recv() {
                     match command {
-                        StreamerCommand::Start { server, stream_key, capture_mode, audio_source, process_hints, microphone, settings, reply } => {
-                            let result = streamer.start(&server, &stream_key, capture_mode, audio_source, &process_hints, microphone, &settings);
+                        StreamerCommand::Start { request, reply } => {
+                            let result = streamer.start(&request);
                             let _ = reply.send(result);
                         }
                         StreamerCommand::Stop { reply } => {
@@ -52,18 +78,10 @@ impl StreamerHandle {
         Ok(Self { sender })
     }
 
-    pub(crate) fn start(
-        &self,
-        server: String,
-        stream_key: String,
-        capture_mode: CaptureMode,
-        audio_source: AudioCaptureSource,
-        process_hints: Vec<String>,
-        microphone: bool,
-        settings: RecorderSettings,
-    ) -> Result<()> {
+    pub(crate) fn start(&self, request: StreamRequest) -> Result<()> {
         let (reply, receive) = mpsc::channel();
-        self.sender.send(StreamerCommand::Start { server, stream_key, capture_mode, audio_source, process_hints, microphone, settings, reply })
+        self.sender
+            .send(StreamerCommand::Start { request, reply })
             .context("OBS worker thread is not available")?;
         receive.recv().context("OBS worker stopped before replying")?
     }
@@ -89,36 +107,44 @@ impl Drop for RtmpStreamer {
 }
 
 impl RtmpStreamer {
-    pub(crate) fn is_streaming(&self) -> bool {
+    fn is_streaming(&self) -> bool {
         self.output.is_some()
     }
 
-    pub(crate) fn start(
-        &mut self,
-        server: &str,
-        stream_key: &str,
-        capture_mode: CaptureMode,
-        audio_source: AudioCaptureSource,
-        process_hints: &[String],
-        microphone: bool,
-        settings: &RecorderSettings,
-    ) -> Result<()> {
+    fn start(&mut self, request: &StreamRequest) -> Result<()> {
         if self.is_streaming() {
             bail!("VodLink is already streaming");
         }
-        if !matches!(url::Url::parse(server), Ok(url) if matches!(url.scheme(), "rtmp" | "rtmps")) {
+        if !matches!(url::Url::parse(&request.server), Ok(url) if matches!(url.scheme(), "rtmp" | "rtmps")) {
             bail!("YouTube returned an invalid RTMP ingest address");
         }
-        if stream_key.trim().is_empty() {
+        if request.stream_key.trim().is_empty() {
             bail!("YouTube returned an empty RTMP stream key");
         }
 
-        let mut context = create_context(settings)?;
+        let mut context = create_context(&request.settings)?;
         let mut scene = context.scene("VodLink", Some(0)).context("Could not create the OBS scene")?;
-        add_video_source(&mut context, &mut scene, capture_mode, audio_source, process_hints)?;
-        add_audio_sources(&mut context, &mut scene, audio_source, microphone, process_hints)?;
+        add_video_source(
+            &mut context,
+            &mut scene,
+            request.capture_mode,
+            request.audio_source,
+            &request.process_hints,
+        )?;
+        add_audio_sources(
+            &mut context,
+            &mut scene,
+            request.audio_source,
+            request.microphone,
+            &request.process_hints,
+        )?;
 
-        let output = create_rtmp_output(&context, server, stream_key, settings)?;
+        let output = create_rtmp_output(
+            &context,
+            &request.server,
+            &request.stream_key,
+            &request.settings,
+        )?;
         output.start().context("OBS could not start the YouTube RTMP output")?;
         self.context = Some(context);
         self.output = Some(output);

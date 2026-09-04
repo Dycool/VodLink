@@ -69,12 +69,6 @@ fn auth_expired(error: &anyhow::Error) -> bool {
     error.to_string().contains("AUTH_EXPIRED")
 }
 
-impl Default for StreamState {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

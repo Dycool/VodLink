@@ -50,19 +50,15 @@ pub(crate) fn youtube_quality_tier(width: u32, height: u32) -> &'static str {
 pub(crate) fn default_h264_bitrate(width: u32, height: u32, fps: u32) -> u32 {
     let tier = youtube_quality_tier(width, height);
     let high = fps > 30;
-    match tier {
-        "2160p" => {
-            if high { 35_000 } else { 30_000 }
-        }
-        "1440p" => {
-            if high { 24_000 } else { 15_000 }
-        }
-        "1080p" => {
-            if high { 12_000 } else { 10_000 }
-        }
-        "720p" => {
-            if high { 6_000 } else { 4_000 }
-        }
+    match (tier, high) {
+        ("2160p", true) => 35_000,
+        ("2160p", false) => 30_000,
+        ("1440p", true) => 24_000,
+        ("1440p", false) => 15_000,
+        ("1080p", true) => 12_000,
+        ("1080p", false) => 10_000,
+        ("720p", true) => 6_000,
+        ("720p", false) => 4_000,
         _ => 4_000,
     }
 }

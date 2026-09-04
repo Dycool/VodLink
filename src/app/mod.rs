@@ -8,7 +8,7 @@ use crate::models::{
 };
 use crate::paths::AppPaths;
 use crate::repository::VodRepository;
-use crate::streaming::StreamerHandle;
+use crate::streaming::{StreamRequest, StreamerHandle};
 use crate::youtube::{BroadcastSettings, PreparedBroadcast, YouTubeLiveClient, default_h264_bitrate};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};

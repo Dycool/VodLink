@@ -295,7 +295,7 @@ impl VodRepository {
                 result.push(row?);
             }
         }
-        result.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        result.sort_by_key(|vod| std::cmp::Reverse(vod.started_at));
         Ok(result)
     }
 

@@ -10,30 +10,32 @@ impl AppController {
         let detector = GameDetector::new(catalog);
         let streamer = StreamerHandle::spawn()?;
 
-        let mut status = AppStatus::default();
-        status.auto_record = read_bool(&repository, AUTO_RECORD_SETTING, false)?;
-        status.share_vods = read_bool(&repository, SHARE_SETTING, false)?;
-        status.microphone = read_bool(&repository, MICROPHONE_SETTING, false)?;
-        status.privacy_mode = normalized_privacy(
-            repository
-                .setting(PRIVACY_SETTING)?
-                .as_deref()
-                .unwrap_or("game_external_audio"),
-        )?;
-        status.last_game = repository.setting(LAST_GAME_SETTING)?.unwrap_or_default();
+        let mut status = AppStatus {
+            auto_record: read_bool(&repository, AUTO_RECORD_SETTING, false)?,
+            share_vods: read_bool(&repository, SHARE_SETTING, false)?,
+            microphone: read_bool(&repository, MICROPHONE_SETTING, false)?,
+            privacy_mode: normalized_privacy(
+                repository
+                    .setting(PRIVACY_SETTING)?
+                    .as_deref()
+                    .unwrap_or("game_external_audio"),
+            )?,
+            last_game: repository.setting(LAST_GAME_SETTING)?.unwrap_or_default(),
+            ..AppStatus::default()
+        };
 
         let mut tokens = AuthTokens::default();
-        if let Some(refresh_token) = repository.setting(REFRESH_TOKEN_SETTING)? {
-            if !refresh_token.trim().is_empty() {
-                match auth.refresh(&refresh_token).await {
-                    Ok(restored) => {
-                        tokens = restored;
-                        status.message = "Google account restored".to_owned();
-                    }
-                    Err(error) => {
-                        status.error = format!("Stored Google sign-in could not be restored: {error}");
-                        repository.remove_setting(REFRESH_TOKEN_SETTING)?;
-                    }
+        if let Some(refresh_token) = repository.setting(REFRESH_TOKEN_SETTING)?
+            && !refresh_token.trim().is_empty()
+        {
+            match auth.refresh(&refresh_token).await {
+                Ok(restored) => {
+                    tokens = restored;
+                    status.message = "Google account restored".to_owned();
+                }
+                Err(error) => {
+                    status.error = format!("Stored Google sign-in could not be restored: {error}");
+                    repository.remove_setting(REFRESH_TOKEN_SETTING)?;
                 }
             }
         }

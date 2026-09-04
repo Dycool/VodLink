@@ -57,7 +57,7 @@ impl GameCatalog {
         for (exe, display) in repository.user_games()? {
             definitions.push(GameDefinition::new(display, [exe]));
         }
-        definitions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        definitions.sort_by_key(|definition| definition.name.to_lowercase());
         let installed = discover_installed_games();
         Ok(Self { definitions, installed })
     }
@@ -114,7 +114,7 @@ impl GameDetector {
 
     pub(crate) fn scan(&mut self) -> (Vec<DetectedGame>, Vec<String>) {
         self.scan_count = self.scan_count.saturating_add(1);
-        if self.scan_count % 150 == 0 {
+        if self.scan_count.is_multiple_of(150) {
             self.catalog.refresh_installed();
         }
         self.system.refresh_processes(ProcessesToUpdate::All, true);
@@ -161,7 +161,7 @@ fn discover_installed_games() -> Vec<InstalledGame> {
     discover_steam(&mut games);
     #[cfg(target_os = "windows")]
     discover_epic(&mut games);
-    games.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    games.sort_by_key(|game| game.name.to_lowercase());
     games.dedup_by(|a, b| a.install_dir == b.install_dir);
     games
 }

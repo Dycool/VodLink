@@ -82,22 +82,18 @@ impl AppController {
         hints.push(game.name.clone());
 
         let streamer = self.streamer.clone();
-        let server = prepared.rtmp_server.clone();
-        let key = prepared.stream_key.clone();
-        let start_recorder = recorder.clone();
-        let start_result = tokio::task::spawn_blocking(move || {
-            streamer.start(
-                server,
-                key,
-                capture_mode,
-                audio_source,
-                hints,
-                microphone,
-                start_recorder,
-            )
-        })
-        .await
-        .context("OBS worker task failed")?;
+        let request = StreamRequest::new(
+            prepared.rtmp_server.clone(),
+            prepared.stream_key.clone(),
+            capture_mode,
+            audio_source,
+            hints,
+            microphone,
+            recorder.clone(),
+        );
+        let start_result = tokio::task::spawn_blocking(move || streamer.start(request))
+            .await
+            .context("OBS worker task failed")?;
         if let Err(error) = start_result {
             let _ = self
                 .youtube

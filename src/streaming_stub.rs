@@ -1,6 +1,38 @@
 use crate::models::{AudioCaptureSource, CaptureMode, RecorderSettings};
 use anyhow::{Result, bail};
 
+pub(crate) struct StreamRequest {
+    server: String,
+    stream_key: String,
+    capture_mode: CaptureMode,
+    audio_source: AudioCaptureSource,
+    process_hints: Vec<String>,
+    microphone: bool,
+    settings: RecorderSettings,
+}
+
+impl StreamRequest {
+    pub(crate) fn new(
+        server: String,
+        stream_key: String,
+        capture_mode: CaptureMode,
+        audio_source: AudioCaptureSource,
+        process_hints: Vec<String>,
+        microphone: bool,
+        settings: RecorderSettings,
+    ) -> Self {
+        Self {
+            server,
+            stream_key,
+            capture_mode,
+            audio_source,
+            process_hints,
+            microphone,
+            settings,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct StreamerHandle;
 
@@ -9,16 +41,25 @@ impl StreamerHandle {
         Ok(Self)
     }
 
-    pub(crate) fn start(
-        &self,
-        _server: String,
-        _stream_key: String,
-        _capture_mode: CaptureMode,
-        _audio_source: AudioCaptureSource,
-        _process_hints: Vec<String>,
-        _microphone: bool,
-        _settings: RecorderSettings,
-    ) -> Result<()> {
+    pub(crate) fn start(&self, request: StreamRequest) -> Result<()> {
+        let StreamRequest {
+            server,
+            stream_key,
+            capture_mode,
+            audio_source,
+            process_hints,
+            microphone,
+            settings,
+        } = request;
+        drop((
+            server,
+            stream_key,
+            capture_mode,
+            audio_source,
+            process_hints,
+            microphone,
+            settings,
+        ));
         bail!("OBS streaming support is disabled in this build")
     }
 
