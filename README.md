@@ -4,55 +4,85 @@
 
 # VodLink
 
-**Automatic YouTube VODs for your game sessions — open a game, stream to your own channel, and keep the recording forever.**
+**Automatic YouTube VODs for your game sessions — implemented in safe Rust.**
 
-🎥 **YouTube-powered recording** — VodLink detects when you launch a supported game, creates a YouTube Live broadcast, streams to your own channel, and saves the finished VOD in a local library.
+VodLink watches for supported games, creates a private YouTube Live broadcast, streams through a private OBS runtime, and keeps the resulting VODs, clips, friend matches, and local metadata together in one library.
 
-⚡ **Fast embedded playback** — The in-app player uses a lightweight YouTube facade and only loads the real player for the VOD you open.
+## Rust port
 
-🎮 **Reliable game recording** — Game capture is built on desktop capture with focus-aware protection, avoiding the classic OBS Game Capture black-screen problem.
+The desktop client is Rust end-to-end. The old Qt/C++ application, player bridge, game detector, libobs integration and bootstrap executable are no longer part of the build.
 
-🎙️ **Audio control** — Pick whether the stream should include only game audio or also external/system audio and your default microphone.
+The client serves its UI on loopback and opens it in the default browser. This replaces the Qt/WebEngine/WebView2 layer without adding first-party native FFI. YouTube playback still uses the YouTube IFrame API, including absolute-time switching between overlapping session VODs.
 
-🖥️ **Ultrawide-aware streaming** — Custom resolutions keep their real canvas while VodLink picks the right YouTube quality ladder and recommended bitrate.
+### Safety invariants
 
-🔐 **Private OBS runtime** — VodLink embeds and initializes its own libobs runtime. It does not read or modify your installed OBS Studio scenes, profiles, plugins, cache, or settings.
+First-party Rust is deliberately unable to fall back to unsafe code:
 
-☁️ **Optional friend matching** — A tiny Cloudflare Worker can match mutual friends' overlapping sessions when sharing is enabled.
+- `#![forbid(unsafe_code)]` is present at crate roots.
+- `Cargo.toml` forbids `unsafe_code`, `unused_unsafe`, `unsafe_op_in_unsafe_fn`, `transmute_ptr_to_ptr`, and undocumented unsafe blocks.
+- `.cargo/config.toml` passes `-Funsafe-code` to rustc.
+- `scripts/check-rust-safety.py` rejects first-party `unsafe`, raw-pointer/FFI escape hatches, `build.rs`, and lint-override attributes.
+- CI runs `cargo clippy --all-targets -- -D warnings` and Miri against the Rust-owned core.
+- OBS access goes through the pinned safe public API of `libobs-rs`; VodLink itself contains no native pointer code.
 
-> **Pre-compiled Binaries Available!**
-> Download VodLink for Windows, macOS, and Linux from the **[Releases](https://github.com/Dycool/VodLink/releases)** page.
-> On Windows, download `VodLink-Windows-x64.exe`. It opens VodLink when already
-> installed; otherwise it silently downloads the verified full installer,
-> installs to `%LOCALAPPDATA%\VodLink\app`, and adds VodLink to the Start menu.
+See [SAFETY.md](SAFETY.md) for the exact policy.
 
----
-
-## ✨ Features
+## Features
 
 | Feature | What it does |
 |---|---|
-| **Automatic sessions** | Detects supported games and starts/stops YouTube recording around the session. |
-| **YouTube VOD library** | Keeps local metadata for your recorded YouTube VODs, clips, thumbnails, games, and timestamps. |
-| **Lightweight playback** | Uses a `lite-youtube`-style facade so the app does not spawn heavy iframes for every VOD card. |
-| **Private OBS runtime** | Runs with its own bundled OBS/libobs runtime instead of touching your installed OBS Studio setup. |
-| **GPU-friendly streaming** | Prefers high-performance GPU paths on Windows and configures OBS/encoder settings for live streaming. |
-| **Ultrawide support** | Keeps weird resolutions intact and maps them to the closest higher YouTube tier by pixel count. |
-| **Manual overrides** | Recommended bitrate is applied automatically when quality changes, then you can still override it manually. |
-| **Optional matching backend** | Uses Cloudflare Workers + D1 only for friend/session matching metadata when sharing is enabled. |
+| Automatic sessions | Detects supported games and starts/stops YouTube recording around the session. |
+| YouTube VOD library | Stores local metadata for recorded VODs, clips, games, owners and timestamps. |
+| Synchronized playback | Switches between overlapping session VODs while preserving absolute session time. |
+| Private OBS runtime | Runs a staged libobs runtime without reading or modifying an installed OBS Studio profile. |
+| Hardware encoder selection | Uses OBS capability discovery and prefers hardware H.264/HEVC/AV1 encoders. |
+| Game/system audio modes | Supports game-only or system audio, plus optional microphone capture. |
+| Optional friend matching | Uses the Cloudflare Worker only when VOD sharing is enabled. |
+| Existing data compatibility | Reuses and migrates the existing VodLink SQLite database/settings layout. |
 
----
+## Building the Rust client
 
-## 🧩 Optional Cloudflare Worker
+The repository pins Rust `1.98.1` and `libobs-rs` revision `0f306186d2f1414fb51e717fafd43f48cfce3114`.
 
-The Worker is only used for mutual friend/session matching. It exposes two session routes:
+Install the matching OBS runtime helper once:
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/start` | Record that you started streaming a game |
-| `GET` | `/stop` | Close the session and return matching mutual friend VODs |
+```bash
+cargo install cargo-obs-build --git https://github.com/libobs-rs/libobs-rs --rev 0f306186d2f1414fb51e717fafd43f48cfce3114 --locked
+```
 
-The Worker is designed to be free-tier friendly: one start request, one stop request, short-lived D1 rows, and no video storage.
+Stage the private OBS runtime beside the executable and build:
+
+```bash
+cargo obs-build build --out-dir target/release
+cargo build --release
+```
+
+For first-party core development without native OBS dependencies:
+
+```bash
+cargo clippy --no-default-features --all-targets -- -D warnings
+cargo test --no-default-features --all-targets
+```
+
+Run the deterministic source-policy check with:
+
+```bash
+python3 scripts/check-rust-safety.py
+```
+
+### Windows installer
+
+With Inno Setup 6 installed:
+
+```powershell
+./scripts/package-windows.ps1 -Version 0.2.0
+```
+
+The script packages `target/release/vodlink.exe` and the runtime staged by `cargo-obs-build` into `installer-output/VodLink-Windows-x64-Setup.exe`. There is no C++ bootstrapper.
+
+## Optional Cloudflare Worker
+
+The Worker is separate from the desktop client and is only used for mutual friend/session matching. It stores no video.
 
 ```bash
 cd worker
@@ -62,54 +92,29 @@ npm run db:init:remote
 npm run deploy
 ```
 
-Set your deployed Worker URL in VodLink only if you want friend VOD matching.
+Set the deployed Worker URL through `VODLINK_WORKER_URL` when building/running VodLink if friend matching is wanted.
 
----
+## Configuration
 
-## 🔨 Building
+VodLink reads the Google OAuth client configuration and optional Worker endpoint from environment variables:
 
-Requirements: **CMake ≥ 3.25**, a **C++20** compiler, **Qt 6.8+** with Widgets/Network/Auth/WebEngine modules, and a matching private **libobs** development/runtime bundle.
+- `VODLINK_GOOGLE_CLIENT_ID`
+- `VODLINK_GOOGLE_CLIENT_SECRET` (optional for installed-app clients)
+- `VODLINK_WORKER_URL` (optional)
 
-**Configure and build**
+The local database and settings remain under VodLink's platform-specific application-data directory.
 
-```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLIBOBS_ROOT=/path/to/obs-dev-root \
-  -DVODLINK_OBS_RUNTIME_DIR=/path/to/private/obs-runtime
-cmake --build build --config Release --parallel
-```
+## References
 
-**Private OBS runtime layout**
-
-| Platform | Runtime location |
+| Component | Implementation |
 |---|---|
-| **Windows** | Embedded into `VodLink.exe` when `VODLINK_OBS_RUNTIME_DIR` is set, then extracted at runtime |
-| **macOS** | Bundled inside `VodLink.app/Contents/Frameworks/obs-runtime` |
-| **Linux** | Bundled inside the AppImage payload at `usr/bin/obs-runtime` |
+| Desktop client | Rust + Tokio + Axum |
+| Streaming runtime | pinned `libobs-rs` safe wrappers around OBS/libobs |
+| HTTP/OAuth/YouTube | Reqwest + Rust OAuth/PKCE implementation |
+| Local library | Rusqlite / SQLite |
+| Playback UI | loopback web UI + YouTube IFrame API |
+| Matching backend | Cloudflare Workers + D1 |
 
----
+## License
 
-
-## 🔗 References
-
-| Component | Source |
-|---|---|
-| **Desktop app** | [Qt 6 Widgets](https://doc.qt.io/qt-6/qtwidgets-index.html), WebEngine, WebChannel |
-| **Streaming runtime** | [OBS/libobs](https://obsproject.com/) embedded as a private runtime |
-| **Video hosting** | YouTube Live Streaming API, YouTube Data API, RTMP/RTMPS ingest |
-| **Playback** | YouTube IFrame API with a lightweight `lite-youtube`-style facade |
-| **Matching backend** | Cloudflare Workers + D1 |
-| **Local library** | SQLite-backed app data |
-
----
-
-## 🐛 Reporting Issues
-
-Found a bug or have a feature request? Open an issue at **[github.com/Dycool/VodLink/issues](https://github.com/Dycool/VodLink/issues)** with your OS, game, encoder, resolution/FPS, and relevant debug logs.
-
----
-
-## 📄 License
-
-See the repository license for details.
+GPL-3.0-only. See [LICENSE](LICENSE).
