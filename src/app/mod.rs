@@ -88,6 +88,7 @@ pub(crate) struct AppController {
     shutdown_notify: Notify,
 }
 
+#[cfg(feature = "desktop")]
 impl AppController {
     pub(crate) async fn tray_state(&self) -> (bool, bool, bool, String) {
         let (auto_record, share_vods, tooltip) = {
