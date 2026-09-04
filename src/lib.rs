@@ -4,6 +4,8 @@ mod app;
 mod auth;
 mod cloud;
 mod config;
+#[cfg(feature = "desktop")]
+mod desktop;
 mod games;
 mod models;
 mod paths;
@@ -20,13 +22,27 @@ use anyhow::{Context, Result};
 use tracing_subscriber::EnvFilter;
 
 pub fn run() -> Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("vodlink=info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("vodlink=info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .try_init();
 
     let start_minimized = std::env::args().any(|argument| {
-        argument.eq_ignore_ascii_case("--minimized") || argument.eq_ignore_ascii_case("--startup")
+        argument.eq_ignore_ascii_case("--minimized")
+            || argument.eq_ignore_ascii_case("--startup")
     });
 
+    run_frontend(start_minimized)
+}
+
+#[cfg(feature = "desktop")]
+fn run_frontend(start_minimized: bool) -> Result<()> {
+    desktop::run(start_minimized)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn run_frontend(start_minimized: bool) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

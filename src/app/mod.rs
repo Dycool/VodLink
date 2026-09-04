@@ -88,6 +88,21 @@ pub(crate) struct AppController {
     shutdown_notify: Notify,
 }
 
+impl AppController {
+    pub(crate) async fn tray_state(&self) -> (bool, bool, bool, String) {
+        let (auto_record, share_vods, tooltip) = {
+            let status = self.status.read().await;
+            (
+                status.auto_record,
+                status.share_vods,
+                status.message.clone(),
+            )
+        };
+        let recording = self.stream.lock().await.state != StreamState::Idle;
+        (auto_record, share_vods, recording, tooltip)
+    }
+}
+
 include!("controller_1.rs");
 include!("controller_2.rs");
 include!("controller_3.rs");

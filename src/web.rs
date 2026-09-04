@@ -7,11 +7,16 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 const INDEX_HTML: &str = include_str!("../resources/web/index.html");
 const APP_JS: &str = include_str!("../resources/web/app.js");
 const STYLES_CSS: &str = include_str!("../resources/web/styles.css");
+pub(crate) const UI_ADDRESS: &str = "127.0.0.1:43861";
+
+type UiHandler = Arc<dyn Fn() + Send + Sync + 'static>;
+static SHOW_WINDOW_HANDLER: OnceLock<UiHandler> = OnceLock::new();
+static EXIT_HANDLER: OnceLock<UiHandler> = OnceLock::new();
 
 #[derive(Debug)]
 struct ApiError(anyhow::Error);
@@ -67,12 +72,60 @@ struct ClipRequest {
     url: String,
 }
 
-pub(crate) async fn serve(controller: Arc<AppController>, start_minimized: bool) -> Result<()> {
-    let router = Router::new()
+pub(crate) fn ui_url() -> String {
+    format!("http://{UI_ADDRESS}/")
+}
+
+pub(crate) fn register_show_window_handler(handler: UiHandler) -> Result<()> {
+    SHOW_WINDOW_HANDLER
+        .set(handler)
+        .map_err(|_| anyhow::anyhow!("VodLink window handler was already registered"))
+}
+
+pub(crate) fn register_exit_handler(handler: UiHandler) -> Result<()> {
+    EXIT_HANDLER
+        .set(handler)
+        .map_err(|_| anyhow::anyhow!("VodLink exit handler was already registered"))
+}
+
+pub(crate) fn bind_ui() -> std::io::Result<std::net::TcpListener> {
+    let listener = std::net::TcpListener::bind(UI_ADDRESS)?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
+pub(crate) async fn existing_instance(show: bool) -> bool {
+    let client = reqwest::Client::new();
+    let ping = client
+        .get(format!("http://{UI_ADDRESS}/api/ping"))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await;
+
+    let Ok(response) = ping else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+
+    if show {
+        let _ = client
+            .post(format!("http://{UI_ADDRESS}/api/window/show"))
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await;
+    }
+    true
+}
+
+fn router(controller: Arc<AppController>) -> Router {
+    Router::new()
         .route("/", get(index))
         .route("/app.js", get(javascript))
         .route("/styles.css", get(styles))
         .route("/api/ping", get(ping))
+        .route("/api/window/show", post(show_window))
         .route("/api/snapshot", get(snapshot))
         .route("/api/sign-in", post(sign_in))
         .route("/api/sign-out", post(sign_out))
@@ -88,22 +141,31 @@ pub(crate) async fn serve(controller: Arc<AppController>, start_minimized: bool)
         .route("/api/clips/import", post(import_clip))
         .route("/api/data-root", get(data_root))
         .route("/api/shutdown", post(shutdown))
-        .with_state(controller.clone());
+        .with_state(controller)
+}
 
-    let address = "127.0.0.1:43861";
-    let listener = match tokio::net::TcpListener::bind(address).await {
+pub(crate) async fn serve_bound(
+    controller: Arc<AppController>,
+    listener: std::net::TcpListener,
+) -> Result<()> {
+    let listener = tokio::net::TcpListener::from_std(listener)
+        .context("Could not attach VodLink UI listener to the async runtime")?;
+    let shutdown_controller = controller.clone();
+    axum::serve(listener, router(controller))
+        .with_graceful_shutdown(async move {
+            shutdown_controller.wait_shutdown().await;
+        })
+        .await
+        .context("VodLink local UI server failed")
+}
+
+pub(crate) async fn serve(controller: Arc<AppController>, start_minimized: bool) -> Result<()> {
+    let listener = match bind_ui() {
         Ok(listener) => listener,
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            let url = format!("http://{address}/api/ping");
-            let existing = reqwest::Client::new()
-                .get(url)
-                .timeout(std::time::Duration::from_secs(2))
-                .send()
-                .await
-                .is_ok_and(|response| response.status().is_success());
-            if existing {
+            if existing_instance(!start_minimized).await {
                 if !start_minimized {
-                    let _ = webbrowser::open(&format!("http://{address}/"));
+                    let _ = webbrowser::open(&ui_url());
                 }
                 return Ok(());
             }
@@ -113,23 +175,14 @@ pub(crate) async fn serve(controller: Arc<AppController>, start_minimized: bool)
     };
 
     if !start_minimized {
-        webbrowser::open(&format!("http://{address}/"))
+        webbrowser::open(&ui_url())
             .context("Could not open the VodLink interface in the default browser")?;
     }
 
     let monitor = tokio::spawn(controller.clone().run_monitor());
-    let shutdown_controller = controller.clone();
-    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
-        tokio::select! {
-            _ = shutdown_controller.wait_shutdown() => {}
-            _ = tokio::signal::ctrl_c() => {
-                let _ = shutdown_controller.request_shutdown().await;
-            }
-        }
-    });
-    server.await.context("VodLink local UI server failed")?;
+    let result = serve_bound(controller, listener).await;
     monitor.abort();
-    Ok(())
+    result
 }
 
 async fn index() -> Html<&'static str> {
@@ -148,21 +201,36 @@ async fn ping() -> Json<ApiMessage> {
     ApiMessage::ok("VodLink")
 }
 
-async fn snapshot(State(controller): State<Arc<AppController>>) -> Result<impl IntoResponse, ApiError> {
+async fn show_window() -> Json<ApiMessage> {
+    if let Some(handler) = SHOW_WINDOW_HANDLER.get() {
+        handler();
+    }
+    ApiMessage::ok("VodLink window requested")
+}
+
+async fn snapshot(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(controller.snapshot().await?))
 }
 
-async fn sign_in(State(controller): State<Arc<AppController>>) -> Result<impl IntoResponse, ApiError> {
+async fn sign_in(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
     controller.sign_in().await?;
     Ok(ApiMessage::ok("Signed in"))
 }
 
-async fn sign_out(State(controller): State<Arc<AppController>>) -> Result<impl IntoResponse, ApiError> {
+async fn sign_out(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
     controller.sign_out().await?;
     Ok(ApiMessage::ok("Signed out"))
 }
 
-async fn sync_library(State(controller): State<Arc<AppController>>) -> Result<impl IntoResponse, ApiError> {
+async fn sync_library(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
     controller.sync_library().await?;
     Ok(ApiMessage::ok("Library synced"))
 }
@@ -195,11 +263,15 @@ async fn add_game(
     State(controller): State<Arc<AppController>>,
     Json(request): Json<GameRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    controller.add_manual_game(&request.executable, &request.name).await?;
+    controller
+        .add_manual_game(&request.executable, &request.name)
+        .await?;
     Ok(ApiMessage::ok("Game added"))
 }
 
-async fn stop_recording(State(controller): State<Arc<AppController>>) -> Result<impl IntoResponse, ApiError> {
+async fn stop_recording(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
     controller.stop_recording().await?;
     Ok(ApiMessage::ok("Recording stopped"))
 }
@@ -231,14 +303,23 @@ async fn import_clip(
     State(controller): State<Arc<AppController>>,
     Json(request): Json<ClipRequest>,
 ) -> Result<Json<VodClip>, ApiError> {
-    Ok(Json(controller.import_clip(&request.youtube_id, &request.url).await?))
+    Ok(Json(
+        controller
+            .import_clip(&request.youtube_id, &request.url)
+            .await?,
+    ))
 }
 
 async fn data_root(State(controller): State<Arc<AppController>>) -> Json<ApiMessage> {
     ApiMessage::ok(controller.data_root().display().to_string())
 }
 
-async fn shutdown(State(controller): State<Arc<AppController>>) -> Result<impl IntoResponse, ApiError> {
+async fn shutdown(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
     controller.request_shutdown().await?;
+    if let Some(handler) = EXIT_HANDLER.get() {
+        handler();
+    }
     Ok(ApiMessage::ok("VodLink is shutting down"))
 }
