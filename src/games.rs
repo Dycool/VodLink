@@ -173,15 +173,14 @@ fn discover_steam(out: &mut Vec<InstalledGame>) {
         if let Ok(output) = Command::new("reg")
             .args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                for line in text.lines() {
-                    if line.contains("SteamPath") {
-                        if let Some(path) = line.split_whitespace().last() {
-                            roots.push(PathBuf::from(path));
-                        }
-                    }
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if line.contains("SteamPath")
+                    && let Some(path) = line.split_whitespace().last()
+                {
+                    roots.push(PathBuf::from(path));
                 }
             }
         }
