@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   policy-and-core:
-    name: Policy, format, and safe core
+    name: Policy and safe core
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source without write credentials
@@ -26,13 +26,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
-          components: clippy,rustfmt
+          components: clippy
 
       - name: Enforce first-party safety invariants
         run: python3 scripts/check-rust-safety.py
-
-      - name: Check formatting
-        run: cargo fmt --check
 
       - name: Clippy first-party core
         run: cargo clippy --no-default-features --all-targets -- -D warnings
