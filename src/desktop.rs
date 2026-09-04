@@ -367,7 +367,7 @@ fn load_icons() -> Result<(WindowIcon, TrayIconImage)> {
         .context("Could not decode the embedded VodLink icon")?
         .into_rgba8();
     let (width, height) = decoded.dimensions();
-    let rgba = decoded.into_raw();
+    let rgba = decoded.as_raw().to_vec();
 
     let window_icon = WindowIcon::from_rgba(rgba.clone(), width, height)
         .map_err(|error| anyhow::anyhow!("Could not create the VodLink window icon: {error}"))?;
