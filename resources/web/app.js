@@ -46,8 +46,9 @@ function render() {
   if (!snap) return;
   const status = snap.status;
   const signedIn = Boolean(status.signed_in_email);
-  $('setupPage').classList.toggle('hidden', signedIn);
-  $('restorePage').classList.add('hidden');
+  const restoring = !signedIn && Boolean(snap.stored_credentials);
+  $('setupPage').classList.toggle('hidden', signedIn || restoring);
+  $('restorePage').classList.toggle('hidden', !restoring);
   $('mainPage').classList.toggle('hidden', !signedIn);
   $('authConfigurationHint').classList.toggle('hidden', snap.auth_configured);
   $('setupSignIn').disabled = !snap.auth_configured;
