@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(target_os = "windows")]
 const WINDOWS_RUN_VALUE: &str = "VodLink";
 
 pub(crate) fn supported() -> bool {
