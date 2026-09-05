@@ -1,3 +1,10 @@
+fn validate_recorder_bitrate(value: u32) -> Result<u32> {
+    if !(2_500..=40_000).contains(&value) {
+        bail!("Recorder bitrate must be between 2500 and 40000 Kbps");
+    }
+    Ok(value)
+}
+
 impl AppController {
     pub(crate) async fn update_settings(&self, update: SettingsUpdate) -> Result<()> {
         if let Some(value) = update.auto_record {
@@ -38,9 +45,7 @@ impl AppController {
             self.repository.set_setting(ENCODER_SETTING, &normalized)?;
         }
         if let Some(value) = update.bitrate_kbps {
-            if !(500..=60_000).contains(&value) {
-                bail!("Recorder bitrate must be between 500 and 60000 Kbps");
-            }
+            let value = validate_recorder_bitrate(value)?;
             self.repository
                 .set_setting(BITRATE_SETTING, &value.to_string())?;
         }
@@ -225,4 +230,17 @@ impl AppController {
         self.paths.root()
     }
 
+}
+
+#[cfg(test)]
+mod controller_2_tests {
+    use super::*;
+
+    #[test]
+    fn recorder_bitrate_matches_cpp_settings_range() {
+        assert_eq!(validate_recorder_bitrate(2_500).expect("minimum"), 2_500);
+        assert_eq!(validate_recorder_bitrate(40_000).expect("maximum"), 40_000);
+        assert!(validate_recorder_bitrate(2_499).is_err());
+        assert!(validate_recorder_bitrate(40_001).is_err());
+    }
 }
