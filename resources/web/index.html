@@ -96,13 +96,15 @@
       <div class="dialog-title-row"><h1>VodLink Settings</h1><button id="closeSettingsTop" class="icon-button">×</button></div>
       <h2>Recorder</h2>
       <div class="settings-form">
-        <label><span>Encoder</span><select id="encoder"><option>H.264</option><option>HEVC</option><option>AV1</option></select></label>
+        <label><span>Encoder</span><select id="encoder"><option>H.264</option><option>HEVC</option></select></label>
         <label><span>Bitrate</span><div class="suffix-input"><input id="bitrate" type="number" min="2500" max="40000" step="500"><em>Kbps</em></div></label>
-        <label><span>Resolution</span><input id="resolution" list="resolutionOptions" placeholder="3440x1440"><datalist id="resolutionOptions"><option value="3840x2160"><option value="3440x1440"><option value="2560x1440"><option value="2560x1080"><option value="1920x1080"><option value="1600x900"><option value="1366x768"><option value="1280x720"></datalist></label>
+        <label><span>Resolution</span><input id="resolution" list="resolutionOptions" placeholder="3440x1440"><datalist id="resolutionOptions"></datalist></label>
         <label><span>Framerate</span><select id="fps"><option value="60">60</option><option value="30">30</option></select></label>
         <label><span>Privacy</span><select id="privacyMode"><option value="game_only">Game only</option><option value="game_external_audio">Game and external audio</option><option value="desktop">Desktop</option><option value="full_desktop">Desktop with external audio</option></select></label>
       </div>
       <label class="check-row setting-check"><input id="microphone" type="checkbox"><span>Capture the default microphone</span></label>
+      <label class="check-row setting-check"><input id="notifications" type="checkbox"><span>Show tray notifications</span></label>
+      <label class="check-row setting-check"><input id="launchStartup" type="checkbox"><span>Launch minimized when Windows starts</span></label>
       <div class="settings-actions">
         <button id="addGameButton" class="ghost">Add game manually</button>
         <button id="syncButton" class="ghost">Sync YouTube VODs</button>
