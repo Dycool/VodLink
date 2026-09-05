@@ -53,12 +53,19 @@ impl AppController {
             .repository
             .setting(REFRESH_TOKEN_SETTING)?
             .is_some_and(|token| !token.trim().is_empty());
+        let recorder = self.recorder_settings()?;
+        let saved_resolution = self
+            .repository
+            .setting(RESOLUTION_SETTING)?
+            .unwrap_or_else(|| format!("{}x{}", recorder.width, recorder.height));
         Ok(Snapshot {
             status: self.status.read().await.clone(),
             vods: self.repository.list(None)?,
             games: self.repository.games()?,
             friends: self.repository.friends()?,
-            recorder: self.recorder_settings()?,
+            recorder,
+            resolution_options: available_resolutions(&saved_resolution),
+            encoder_choices: available_encoder_choices(),
             worker_configured: self.config.worker_configured(),
             auth_configured: self.auth_configured(),
             stored_credentials,
