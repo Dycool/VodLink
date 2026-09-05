@@ -22,6 +22,9 @@ use tokio::sync::{Mutex, Notify, RwLock};
 const SHARE_SETTING: &str = "share_vods";
 const AUTO_RECORD_SETTING: &str = "auto_record";
 const MICROPHONE_SETTING: &str = "microphone_enabled";
+const NOTIFICATIONS_SETTING: &str = "notifications";
+const LAUNCH_AT_STARTUP_SETTING: &str = "launch_at_startup";
+const TRAY_CLOSE_TIP_SHOWN_SETTING: &str = "tray_close_tip_shown";
 const PRIVACY_SETTING: &str = "privacy_mode";
 const LAST_GAME_SETTING: &str = "last_game";
 const REFRESH_TOKEN_SETTING: &str = "oauth_refresh_token";
@@ -44,6 +47,7 @@ pub(crate) struct Snapshot {
     worker_configured: bool,
     auth_configured: bool,
     stored_credentials: bool,
+    startup_supported: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -51,6 +55,8 @@ pub(crate) struct SettingsUpdate {
     pub(crate) auto_record: Option<bool>,
     pub(crate) share_vods: Option<bool>,
     pub(crate) microphone: Option<bool>,
+    pub(crate) notifications: Option<bool>,
+    pub(crate) launch_at_startup: Option<bool>,
     pub(crate) privacy_mode: Option<String>,
     pub(crate) encoder: Option<String>,
     pub(crate) bitrate_kbps: Option<u32>,
@@ -103,6 +109,16 @@ impl AppController {
         };
         let recording = self.stream.lock().await.state != StreamState::Idle;
         (auto_record, share_vods, recording, tooltip)
+    }
+
+    pub(crate) fn tray_close_tip_needed(&self) -> Result<bool> {
+        Ok(read_bool(&self.repository, NOTIFICATIONS_SETTING, true)?
+            && !read_bool(&self.repository, TRAY_CLOSE_TIP_SHOWN_SETTING, false)?)
+    }
+
+    pub(crate) fn mark_tray_close_tip_shown(&self) -> Result<()> {
+        self.repository
+            .set_setting(TRAY_CLOSE_TIP_SHOWN_SETTING, "1")
     }
 }
 
