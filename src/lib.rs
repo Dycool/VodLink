@@ -10,6 +10,7 @@ mod games;
 mod models;
 mod paths;
 mod repository;
+mod startup;
 #[cfg(feature = "obs")]
 mod streaming;
 #[cfg(not(feature = "obs"))]
