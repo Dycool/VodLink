@@ -44,6 +44,8 @@ pub(crate) struct Snapshot {
     games: Vec<String>,
     friends: Vec<AccountProfile>,
     recorder: RecorderSettings,
+    resolution_options: Vec<String>,
+    encoder_choices: Vec<String>,
     worker_configured: bool,
     auth_configured: bool,
     stored_credentials: bool,
