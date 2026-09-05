@@ -128,4 +128,5 @@ include!("controller_1.rs");
 include!("controller_2.rs");
 include!("controller_3.rs");
 include!("controller_4.rs");
+include!("controller_reset.rs");
 include!("helpers.rs");
