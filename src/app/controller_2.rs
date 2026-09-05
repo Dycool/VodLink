@@ -17,6 +17,17 @@ impl AppController {
                 .set_setting(MICROPHONE_SETTING, bool_text(value))?;
             self.status.write().await.microphone = value;
         }
+        if let Some(value) = update.notifications {
+            self.repository
+                .set_setting(NOTIFICATIONS_SETTING, bool_text(value))?;
+            self.status.write().await.notifications = value;
+        }
+        if let Some(value) = update.launch_at_startup {
+            crate::startup::set_enabled(value)?;
+            self.repository
+                .set_setting(LAUNCH_AT_STARTUP_SETTING, bool_text(value))?;
+            self.status.write().await.launch_at_startup = crate::startup::enabled();
+        }
         if let Some(value) = update.privacy_mode {
             let normalized = normalized_privacy(&value)?;
             self.repository.set_setting(PRIVACY_SETTING, &normalized)?;
