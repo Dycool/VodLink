@@ -12,7 +12,7 @@ fn normalized_privacy(value: &str) -> Result<String> {
     let normalized = value.trim().to_lowercase();
     match normalized.as_str() {
         "game_only" | "game_external_audio" | "desktop" | "full_desktop" => Ok(normalized),
-        _ => bail!("Unknown privacy mode: {value}"),
+        _ => Ok("game_external_audio".to_owned()),
     }
 }
 
@@ -205,6 +205,26 @@ mod tests {
         assert_eq!(
             capture_policy("desktop").expect("desktop"),
             (CaptureMode::FullDesktop, AudioCaptureSource::System)
+        );
+    }
+
+    #[test]
+    fn privacy_normalization_matches_cpp_fallback_semantics() {
+        assert_eq!(
+            normalized_privacy(" GAME_ONLY ").expect("game only"),
+            "game_only"
+        );
+        assert_eq!(
+            normalized_privacy("full_desktop").expect("legacy desktop"),
+            "full_desktop"
+        );
+        assert_eq!(
+            normalized_privacy("").expect("empty fallback"),
+            "game_external_audio"
+        );
+        assert_eq!(
+            normalized_privacy("unknown-value").expect("unknown fallback"),
+            "game_external_audio"
         );
     }
 
