@@ -122,6 +122,7 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
     let runtime_handle = runtime.handle().clone();
     let runtime_guard = runtime;
     let mut quit_requested = false;
+    let mut tray_message_shown = false;
     let mut auto_checked = auto_record;
     let mut share_checked = share_vods;
     let window_id = window.id();
@@ -140,10 +141,12 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
             } if event_window == window_id => {
                 if tray.icon.is_some() && !quit_requested {
                     window.set_visible(false);
-                    if controller.tray_close_tip_needed().unwrap_or(false) {
+                    if !tray_message_shown && controller.tray_close_tip_needed().unwrap_or(false) {
+                        tray_message_shown = true;
                         if let Err(error) = controller.mark_tray_close_tip_shown() {
                             tracing::warn!(%error, "Could not persist first tray-close notification state");
-                        } else if let Err(error) = notify_rust::Notification::new()
+                        }
+                        if let Err(error) = notify_rust::Notification::new()
                             .summary("VodLink is still running")
                             .body("VodLink keeps watching for games in the background. Quit from the tray icon to exit.")
                             .appname("VodLink")
