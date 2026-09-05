@@ -144,7 +144,7 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                 show_window(&window);
                 let _ = webview.evaluate_script("window.vodlinkOpenSettings?.();");
             }
-            Event::UserEvent(UserEvent::Tray(event)) => match event {
+            Event::UserEvent(UserEvent::Tray(
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
@@ -153,9 +153,9 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                 | TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
-                } => show_window(&window),
-                _ => {}
-            },
+                },
+            )) => show_window(&window),
+            Event::UserEvent(UserEvent::Tray(_)) => {}
             Event::UserEvent(UserEvent::Menu(event)) => {
                 if event.id == tray.open_id {
                     show_window(&window);
@@ -169,11 +169,11 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                         ..SettingsUpdate::default()
                     };
                     let update_controller = controller.clone();
-                    let _ = runtime_handle.spawn(async move {
+                    std::mem::drop(runtime_handle.spawn(async move {
                         if let Err(error) = update_controller.update_settings(update).await {
                             tracing::error!(%error, "Could not update auto-record from tray");
                         }
-                    });
+                    }));
                 } else if event.id == tray.share_id {
                     share_checked = !share_checked;
                     tray.share_item.set_checked(share_checked);
@@ -182,11 +182,11 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
                         ..SettingsUpdate::default()
                     };
                     let update_controller = controller.clone();
-                    let _ = runtime_handle.spawn(async move {
+                    std::mem::drop(runtime_handle.spawn(async move {
                         if let Err(error) = update_controller.update_settings(update).await {
                             tracing::error!(%error, "Could not update VOD sharing from tray");
                         }
-                    });
+                    }));
                 } else if event.id == tray.quit_id && !quit_requested {
                     quit_requested = true;
                     window.set_visible(false);
@@ -225,17 +225,17 @@ fn request_quit(
     proxy: EventLoopProxy<UserEvent>,
 ) {
     let finished_proxy = proxy.clone();
-    let _ = runtime.spawn(async move {
+    std::mem::drop(runtime.spawn(async move {
         if let Err(error) = controller.request_shutdown().await {
             tracing::error!(%error, "VodLink shutdown cleanup failed");
         }
         let _ = finished_proxy.send_event(UserEvent::Shutdown);
-    });
+    }));
 
-    let _ = runtime.spawn(async move {
+    std::mem::drop(runtime.spawn(async move {
         tokio::time::sleep(Duration::from_secs(20)).await;
         let _ = proxy.send_event(UserEvent::Shutdown);
-    });
+    }));
 }
 
 fn show_window(window: &Window) {
