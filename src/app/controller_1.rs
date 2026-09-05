@@ -10,7 +10,7 @@ impl AppController {
         let detector = GameDetector::new(catalog);
         let streamer = StreamerHandle::spawn()?;
 
-        let mut status = AppStatus {
+        let status = AppStatus {
             auto_record: read_bool(&repository, AUTO_RECORD_SETTING, false)?,
             share_vods: read_bool(&repository, SHARE_SETTING, false)?,
             microphone: read_bool(&repository, MICROPHONE_SETTING, false)?,
@@ -24,23 +24,7 @@ impl AppController {
             ..AppStatus::default()
         };
 
-        let mut tokens = AuthTokens::default();
-        if let Some(refresh_token) = repository.setting(REFRESH_TOKEN_SETTING)?
-            && !refresh_token.trim().is_empty()
-        {
-            match auth.refresh(&refresh_token).await {
-                Ok(restored) => {
-                    tokens = restored;
-                    status.message = "Google account restored".to_owned();
-                }
-                Err(error) => {
-                    status.error = format!("Stored Google sign-in could not be restored: {error}");
-                    repository.remove_setting(REFRESH_TOKEN_SETTING)?;
-                }
-            }
-        }
-
-        let controller = Arc::new(Self {
+        Ok(Arc::new(Self {
             config,
             paths,
             repository,
@@ -49,19 +33,13 @@ impl AppController {
             youtube,
             streamer,
             detector: StdMutex::new(detector),
-            tokens: RwLock::new(tokens),
+            tokens: RwLock::new(AuthTokens::default()),
             status: RwLock::new(status),
             stream: Mutex::new(StreamRuntime::default()),
+            explicitly_signed_out: AtomicBool::new(false),
             shutdown_requested: AtomicBool::new(false),
             shutdown_notify: Notify::new(),
-        });
-
-        let restored = controller.tokens.read().await.clone();
-        if restored.is_signed_in() {
-            controller.adopt_account(restored.profile()).await?;
-            controller.apply_profile(restored.profile()).await;
-        }
-        Ok(controller)
+        }))
     }
 
     fn auth_configured(&self) -> bool {
@@ -69,6 +47,10 @@ impl AppController {
     }
 
     pub(crate) async fn snapshot(&self) -> Result<Snapshot> {
+        let stored_credentials = self
+            .repository
+            .setting(REFRESH_TOKEN_SETTING)?
+            .is_some_and(|token| !token.trim().is_empty());
         Ok(Snapshot {
             status: self.status.read().await.clone(),
             vods: self.repository.list(None)?,
@@ -77,7 +59,53 @@ impl AppController {
             recorder: self.recorder_settings()?,
             worker_configured: self.config.worker_configured(),
             auth_configured: self.auth_configured(),
+            stored_credentials,
         })
+    }
+
+    pub(crate) async fn restore_stored_credentials(&self) {
+        let refresh_token = match self.repository.setting(REFRESH_TOKEN_SETTING) {
+            Ok(Some(token)) if !token.trim().is_empty() => token,
+            Ok(_) => return,
+            Err(error) => {
+                self.set_error(format!("Could not read stored Google credentials: {error}"))
+                    .await;
+                return;
+            }
+        };
+
+        self.set_message("Restoring Google session…").await;
+        match self.auth.refresh(&refresh_token).await {
+            Ok(restored) => {
+                if self.explicitly_signed_out.load(Ordering::Acquire) {
+                    return;
+                }
+                if let Err(error) = self.store_tokens(restored.clone()).await {
+                    self.set_error(format!("Could not store restored Google session: {error}"))
+                        .await;
+                    return;
+                }
+                let profile = restored.profile().clone();
+                if let Err(error) = self.adopt_account(&profile).await {
+                    self.set_error(format!("Could not restore Google account state: {error}"))
+                        .await;
+                    return;
+                }
+                self.apply_profile(&profile).await;
+                let label = if profile.display_name.is_empty() {
+                    profile.email.clone()
+                } else {
+                    profile.display_name.clone()
+                };
+                self.set_message(format!("Signed in as {label}")).await;
+            }
+            Err(error) => {
+                if !self.explicitly_signed_out.load(Ordering::Acquire) {
+                    self.set_error(format!("Stored Google sign-in could not be restored: {error}"))
+                        .await;
+                }
+            }
+        }
     }
 
     pub(crate) async fn run_monitor(self: Arc<Self>) {
@@ -124,6 +152,7 @@ impl AppController {
     }
 
     pub(crate) async fn sign_in(&self) -> Result<()> {
+        self.explicitly_signed_out.store(false, Ordering::Release);
         let tokens = self.auth.sign_in().await?;
         self.store_tokens(tokens).await?;
         let profile = self.tokens.read().await.profile().clone();
@@ -139,6 +168,7 @@ impl AppController {
     }
 
     pub(crate) async fn sign_out(&self) -> Result<()> {
+        self.explicitly_signed_out.store(true, Ordering::Release);
         self.stop_recording().await?;
         self.repository.remove_setting(REFRESH_TOKEN_SETTING)?;
         *self.tokens.write().await = AuthTokens::default();
