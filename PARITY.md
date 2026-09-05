@@ -32,7 +32,7 @@ normal application workflows.
       Settings…, and Quit.
 - [x] Quit requests stream finalization and retains the C++ 20-second bounded
       exit fallback.
-- [ ] First close notification and `tray_close_tip_shown` persistence exactly
+- [x] First close notification and `tray_close_tip_shown` persistence exactly
       match the C++ client.
 - [ ] Launch-at-startup persistence matches the C++ platform implementations.
 - [ ] Release updater behavior matches the C++ client.

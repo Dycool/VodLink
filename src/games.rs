@@ -223,10 +223,10 @@ impl GameDetector {
     pub(crate) fn running_process_names(&mut self) -> Vec<String> {
         #[cfg(target_os = "windows")]
         {
-            return vodlink_native_parity::windowed_process_names()
+            vodlink_native_parity::windowed_process_names()
                 .into_iter()
                 .filter(|name| !is_denylisted(name))
-                .collect();
+                .collect()
         }
         #[cfg(not(target_os = "windows"))]
         {

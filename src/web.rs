@@ -124,7 +124,7 @@ pub(crate) async fn existing_instance(show: bool) -> bool {
 }
 
 fn router(controller: Arc<AppController>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/", get(index))
         .route("/app.js", get(javascript))
         .route("/styles.css", get(styles))
@@ -147,8 +147,10 @@ fn router(controller: Arc<AppController>) -> Router {
         .route("/api/clips/import", post(import_clip))
         .route("/api/data-root", get(data_root))
         .route("/api/reset", post(factory_reset))
-        .route("/api/shutdown", post(shutdown))
-        .with_state(controller)
+        .route("/api/shutdown", post(shutdown));
+    #[cfg(feature = "desktop")]
+    let router = router.route("/api/processes", get(running_processes));
+    router.with_state(controller)
 }
 
 pub(crate) async fn serve_bound(
@@ -228,6 +230,11 @@ async fn snapshot(
     State(controller): State<Arc<AppController>>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(controller.snapshot().await?))
+}
+
+#[cfg(feature = "desktop")]
+async fn running_processes(State(controller): State<Arc<AppController>>) -> Json<Vec<String>> {
+    Json(controller.running_process_names())
 }
 
 async fn sign_in(

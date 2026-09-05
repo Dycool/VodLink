@@ -123,6 +123,14 @@ impl AppController {
         self.repository
             .set_setting(TRAY_CLOSE_TIP_SHOWN_SETTING, "1")
     }
+
+    pub(crate) fn running_process_names(&self) -> Vec<String> {
+        let mut detector = self
+            .detector
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        detector.running_process_names()
+    }
 }
 
 include!("controller_1.rs");

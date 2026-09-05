@@ -89,6 +89,23 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
     let monitor_controller = controller.clone();
     let _monitor_task = runtime.spawn(monitor_controller.run_monitor());
 
+    #[cfg(target_os = "windows")]
+    let _updater_task = {
+        let updater_controller = controller.clone();
+        let updater_proxy = event_loop.create_proxy();
+        runtime.spawn(async move {
+            match crate::updater::check_and_launch(updater_controller, start_minimized).await {
+                Ok(true) => {
+                    let _ = updater_proxy.send_event(UserEvent::Shutdown);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "VodLink release update check failed");
+                }
+            }
+        })
+    };
+
     let server_controller = controller.clone();
     let server_proxy = event_loop.create_proxy();
     let _server_task = runtime.spawn(async move {

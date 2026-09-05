@@ -23,11 +23,6 @@ pub(crate) async fn check_and_launch(
     }
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    let (_, _, recording, _) = controller.tray_state().await;
-    if recording {
-        tracing::info!("Update deferred until the next launch because a stream is active");
-        return Ok(false);
-    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -51,6 +46,12 @@ pub(crate) async fn check_and_launch(
         .unwrap_or_default()
         .trim();
     if latest_tag.is_empty() || latest_tag == current_tag {
+        return Ok(false);
+    }
+
+    let (_, _, recording, _) = controller.tray_state().await;
+    if recording {
+        tracing::info!("Update deferred until the next launch because a stream is active");
         return Ok(false);
     }
 

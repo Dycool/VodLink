@@ -77,7 +77,7 @@ foreach ($p in $targets) {{ if (Test-Path -LiteralPath $p) {{ Remove-Item -Liter
                         self.root.display()
                     )
                 })?;
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(target_os = "windows"))]
