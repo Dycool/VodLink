@@ -1,5 +1,2 @@
-[build]
-rustflags = ["-Funsafe-code"]
-
 [alias]
 safety = "clippy --all-targets -- -D warnings"
