@@ -34,7 +34,7 @@ normal application workflows.
       exit fallback.
 - [x] First close notification and `tray_close_tip_shown` persistence exactly
       match the C++ client.
-- [ ] Launch-at-startup persistence matches the C++ platform implementations.
+- [x] Launch-at-startup persistence matches the C++ platform implementations.
 - [ ] Release updater behavior matches the C++ client.
 
 ### Authentication gates

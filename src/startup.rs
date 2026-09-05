@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::io::Write;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -23,6 +25,11 @@ pub(crate) fn set_enabled(enabled: bool) -> Result<()> {
 
 fn current_executable() -> Result<PathBuf> {
     std::env::current_exe().context("VodLink executable path is empty.")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_startup_command(executable: &str) -> String {
+    format!("\"{}\" --minimized", executable.replace('/', "\\"))
 }
 
 #[cfg(target_os = "windows")]
@@ -58,17 +65,16 @@ fn set_enabled_inner(enabled: bool) -> Result<()> {
             "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             KEY_SET_VALUE,
         )
-        .context("Windows rejected the startup registry change.")?;
+        .map_err(|_| anyhow::anyhow!("Windows rejected the startup registry change."))?;
     if enabled {
-        let exe = current_executable()?.to_string_lossy().replace('/', "\\");
-        let command = format!("\"{exe}\" --minimized");
+        let command = windows_startup_command(&current_executable()?.to_string_lossy());
         run.set_value(WINDOWS_RUN_VALUE, &command)
-            .context("Windows rejected the startup registry change.")?;
+            .map_err(|_| anyhow::anyhow!("Windows rejected the startup registry change."))?;
     } else {
         match run.delete_value(WINDOWS_RUN_VALUE) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("Windows rejected the startup registry change."),
+            Err(_) => bail!("Windows rejected the startup registry change."),
         }
     }
     Ok(())
@@ -89,30 +95,19 @@ fn enabled_inner() -> Result<bool> {
 fn set_enabled_inner(enabled: bool) -> Result<()> {
     let path = mac_launch_agent_path()?;
     if !enabled {
-        remove_if_present(&path)?;
+        let _ = std::fs::remove_file(&path);
         return Ok(());
     }
     let parent = path
         .parent()
         .context("Could not create the macOS LaunchAgents directory.")?;
-    std::fs::create_dir_all(parent).context("Could not create the macOS LaunchAgents directory.")?;
-    let exe = xml_escape(&current_executable()?.to_string_lossy());
-    let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-<plist version=\"1.0\">\n\
-<dict>\n\
-  <key>Label</key><string>app.vodlink.VodLink</string>\n\
-  <key>ProgramArguments</key>\n\
-  <array>\n\
-    <string>{exe}</string>\n\
-    <string>--minimized</string>\n\
-  </array>\n\
-  <key>RunAtLoad</key><true/>\n\
-</dict>\n\
-</plist>\n"
-    );
-    std::fs::write(path, content).context("Could not write the macOS startup item.")
+    std::fs::create_dir_all(parent)
+        .map_err(|_| anyhow::anyhow!("Could not create the macOS LaunchAgents directory."))?;
+    write_startup_file(
+        &path,
+        &mac_launch_agent_content(&current_executable()?.to_string_lossy()),
+        "Could not write the macOS startup item.",
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -132,25 +127,19 @@ fn enabled_inner() -> Result<bool> {
 fn set_enabled_inner(enabled: bool) -> Result<()> {
     let path = linux_autostart_path()?;
     if !enabled {
-        remove_if_present(&path)?;
+        let _ = std::fs::remove_file(&path);
         return Ok(());
     }
     let parent = path
         .parent()
         .context("Could not create the Linux autostart directory.")?;
-    std::fs::create_dir_all(parent).context("Could not create the Linux autostart directory.")?;
-    let exe = desktop_quote(&current_executable()?.to_string_lossy());
-    let content = format!(
-        "[Desktop Entry]\n\
-Type=Application\n\
-Name=VodLink\n\
-Comment=Start VodLink minimized\n\
-Exec={exe} --minimized\n\
-Icon=vodlink\n\
-Terminal=false\n\
-X-GNOME-Autostart-enabled=true\n"
-    );
-    std::fs::write(path, content).context("Could not write the Linux autostart entry.")
+    std::fs::create_dir_all(parent)
+        .map_err(|_| anyhow::anyhow!("Could not create the Linux autostart directory."))?;
+    write_startup_file(
+        &path,
+        &linux_autostart_content(&current_executable()?.to_string_lossy()),
+        "Could not write the Linux autostart entry.",
+    )
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -180,15 +169,15 @@ fn linux_autostart_path() -> Result<PathBuf> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn remove_if_present(path: &Path) -> Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).context("Could not remove the VodLink startup item."),
-    }
+fn write_startup_file(path: &Path, content: &str, open_error: &str) -> Result<()> {
+    let mut file = std::fs::File::create(path).map_err(|_| anyhow::anyhow!(open_error.to_owned()))?;
+    // C++ checks that QFile opens, but deliberately does not inspect QTextStream's
+    // eventual write status. Preserve that externally observable failure behavior.
+    let _ = file.write_all(content.as_bytes());
+    Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -198,22 +187,90 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "macos", test))]
+fn mac_launch_agent_content(executable: &str) -> String {
+    let exe = xml_escape(executable);
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key><string>app.vodlink.VodLink</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{exe}</string>\n\
+    <string>--minimized</string>\n\
+  </array>\n\
+  <key>RunAtLoad</key><true/>\n\
+</dict>\n\
+</plist>\n"
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
 fn desktop_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn linux_autostart_content(executable: &str) -> String {
+    let exe = desktop_quote(executable);
+    format!(
+        "[Desktop Entry]\n\
+Type=Application\n\
+Name=VodLink\n\
+Comment=Start VodLink minimized\n\
+Exec={exe} --minimized\n\
+Icon=vodlink\n\
+Terminal=false\n\
+X-GNOME-Autostart-enabled=true\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
+    use super::*;
+
     #[test]
-    fn xml_escape_matches_qt_writer_expectations() {
-        assert_eq!(super::xml_escape("a&<>'\""), "a&amp;&lt;&gt;&apos;&quot;");
+    fn windows_command_matches_cpp_exactly() {
+        assert_eq!(
+            windows_startup_command("C:/Program Files/VodLink/VodLink.exe"),
+            "\"C:\\Program Files\\VodLink\\VodLink.exe\" --minimized"
+        );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn desktop_quote_matches_cpp_escaping() {
-        assert_eq!(super::desktop_quote("a\\b\"c"), "\"a\\\\b\\\"c\"");
+    fn mac_plist_matches_cpp_exactly() {
+        assert_eq!(
+            mac_launch_agent_content("/Applications/Vod&Link.app/VodLink"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key><string>app.vodlink.VodLink</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>/Applications/Vod&amp;Link.app/VodLink</string>\n\
+    <string>--minimized</string>\n\
+  </array>\n\
+  <key>RunAtLoad</key><true/>\n\
+</dict>\n\
+</plist>\n"
+        );
+    }
+
+    #[test]
+    fn linux_desktop_entry_matches_cpp_exactly() {
+        assert_eq!(
+            linux_autostart_content("/opt/Vod Link/Vod\"Link"),
+            "[Desktop Entry]\n\
+Type=Application\n\
+Name=VodLink\n\
+Comment=Start VodLink minimized\n\
+Exec=\"/opt/Vod Link/Vod\\\"Link\" --minimized\n\
+Icon=vodlink\n\
+Terminal=false\n\
+X-GNOME-Autostart-enabled=true\n"
+        );
     }
 }
