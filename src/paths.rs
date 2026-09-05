@@ -186,6 +186,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(miri, ignore = "directories uses unsupported host account lookup under Miri")]
     fn reset_targets_are_scoped_to_vodlink() {
         let paths = AppPaths::discover().expect("paths");
         for target in paths.reset_targets().expect("reset targets") {

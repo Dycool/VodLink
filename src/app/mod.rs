@@ -24,6 +24,7 @@ const AUTO_RECORD_SETTING: &str = "auto_record";
 const MICROPHONE_SETTING: &str = "microphone_enabled";
 const NOTIFICATIONS_SETTING: &str = "notifications";
 const LAUNCH_AT_STARTUP_SETTING: &str = "launch_at_startup";
+#[cfg(feature = "desktop")]
 const TRAY_CLOSE_TIP_SHOWN_SETTING: &str = "tray_close_tip_shown";
 const PRIVACY_SETTING: &str = "privacy_mode";
 const LAST_GAME_SETTING: &str = "last_game";

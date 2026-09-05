@@ -43,6 +43,7 @@ const NATIVE_ALIASES: &[(&str, &str)] = &[
     ("balatro", "Balatro"),
 ];
 
+#[cfg(all(feature = "desktop", target_os = "windows"))]
 const PROCESS_DENYLIST: &[&str] = &[
     "explorer.exe", "finder", "gnome-shell", "kwin_x11", "kwin_wayland",
     "chrome.exe", "msedge.exe", "firefox.exe", "safari", "brave.exe",
@@ -218,6 +219,7 @@ impl GameDetector {
         (started, stopped)
     }
 
+    #[cfg(feature = "desktop")]
     pub(crate) fn running_process_names(&mut self) -> Vec<String> {
         #[cfg(target_os = "windows")]
         {
@@ -365,6 +367,7 @@ fn add_process_candidate(
     }
 }
 
+#[cfg(all(feature = "desktop", target_os = "windows"))]
 fn is_denylisted(name: &str) -> bool {
     let lower = name.trim().to_lowercase();
     PROCESS_DENYLIST.contains(&lower.as_str())

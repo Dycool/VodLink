@@ -75,25 +75,6 @@ impl VodClip {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct GameDefinition {
-    pub(crate) name: String,
-    pub(crate) process_names: Vec<String>,
-}
-
-impl GameDefinition {
-    pub(crate) fn new(name: impl Into<String>, process_names: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        let mut names = process_names
-            .into_iter()
-            .map(|p| p.into().trim().to_lowercase())
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<_>>();
-        names.sort();
-        names.dedup();
-        Self { name: name.into().trim().to_owned(), process_names: names }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct InstalledGame {
     pub(crate) name: String,
     pub(crate) install_dir: String,

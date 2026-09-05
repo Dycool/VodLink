@@ -22,8 +22,6 @@ fn normalized_encoder(value: &str) -> Result<String> {
         Ok("AV1".to_owned())
     } else if lower.contains("hevc") || lower.contains("h265") || lower.contains("265") {
         Ok("HEVC".to_owned())
-    } else if lower.contains("h264") || lower.contains("x264") || lower.contains("264") {
-        Ok("H.264".to_owned())
     } else {
         Ok("H.264".to_owned())
     }
@@ -138,7 +136,7 @@ fn probable_hardware_av1_encoder_available() -> bool {
         if gpu.is_empty() {
             return false;
         }
-        return gpu.contains("rtx 40")
+        gpu.contains("rtx 40")
             || gpu.contains("rtx 50")
             || gpu.contains("geforce rtx 40")
             || gpu.contains("geforce rtx 50")
@@ -146,7 +144,7 @@ fn probable_hardware_av1_encoder_available() -> bool {
             || gpu.contains("intel arc")
             || gpu.contains("radeon rx 7")
             || gpu.contains("radeon 780m")
-            || gpu.contains("radeon 760m");
+            || gpu.contains("radeon 760m")
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]

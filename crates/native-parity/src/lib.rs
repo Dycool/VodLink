@@ -6,7 +6,7 @@ mod windows {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use std::path::PathBuf;
-    use windows_sys::Win32::Foundation::{BOOL, CloseHandle, FALSE, HWND, LPARAM};
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HWND, LPARAM};
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
         QueryFullProcessImageNameW,
@@ -34,7 +34,7 @@ mod windows {
         names.into_iter().collect()
     }
 
-    unsafe extern "system" fn collect_windowed_pid(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    unsafe extern "system" fn collect_windowed_pid(hwnd: HWND, lparam: LPARAM) -> i32 {
         // SAFETY: `hwnd` is supplied by EnumWindows and is valid for these read-only queries
         // during the callback. No returned handle is retained beyond this invocation.
         let eligible = unsafe {
