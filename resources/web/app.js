@@ -34,6 +34,16 @@ function toast(message, isError = false) {
 async function refresh() {
   try {
     state.snapshot = await api('/api/snapshot');
+    if (state.selected) {
+      const updated = state.snapshot.vods.find(vod => vod.youtube_id === state.selected.youtube_id);
+      if (updated) {
+        const statusChanged = updated.stream_status !== state.selected.stream_status;
+        state.selected = updated;
+        if (statusChanged && $('viewerPanel') && !$('viewerPanel').classList.contains('hidden')) {
+          loadPlayer(updated, currentPlayerOffset());
+        }
+      }
+    }
     render();
   } catch (error) {
     $('errorBanner').textContent = error.message;
@@ -106,6 +116,8 @@ function renderFriends(friends, workerConfigured, status) {
 function isMine(vod) { return !String(vod.owner_email || '').trim(); }
 function vodTitle(vod) { return String(vod.title || '').trim() || (String(vod.game || '').trim() ? `${vod.game} VOD` : 'Untitled VOD'); }
 function ownerText(vod) { return vod.owner_name || vod.owner_email || vod.account_email || 'Local VOD'; }
+function vodIsProcessing(vod) { const status=String(vod.stream_status||'').trim().toLowerCase(); return status==='processing'||status==='uploaded'; }
+function vodProcessingFailed(vod) { const status=String(vod.stream_status||'').trim().toLowerCase(); return status==='failed'||status==='rejected'||status==='deleted'; }
 function vodEnd(vod) { return new Date(vod.started_at).getTime() + (vod.duration_ms > 0 ? vod.duration_ms : 6 * 60 * 60 * 1000); }
 function vodsOverlap(a, b) {
   const as = new Date(a.started_at).getTime(), bs = new Date(b.started_at).getTime();
@@ -115,6 +127,24 @@ function vodsOverlap(a, b) {
 function clampOffset(vod, seconds) {
   const value = Math.max(0, Number(seconds) || 0);
   return vod.duration_ms > 0 ? Math.min(value, vod.duration_ms / 1000) : value;
+}
+
+function shouldRefreshThumbnail(vod, now = Date.now()) {
+  if (!String(vod.youtube_id || '').trim()) return false;
+  if (!(vod.duration_ms > 0)) return true;
+  const endedAt = new Date(vod.started_at).getTime() + vod.duration_ms;
+  return Number.isFinite(endedAt) && now >= endedAt && (now - endedAt) < 6 * 60 * 60 * 1000;
+}
+function thumbnailRefreshInterval(vod, now = Date.now()) {
+  if (!(vod.duration_ms > 0)) return 2 * 60 * 1000;
+  const endedAt = new Date(vod.started_at).getTime() + vod.duration_ms;
+  return !Number.isFinite(endedAt) || (now - endedAt) < 60 * 60 * 1000 ? 2 * 60 * 1000 : 10 * 60 * 1000;
+}
+function thumbnailUrl(vod) {
+  const id = encodeURIComponent(vod.youtube_id);
+  if (!shouldRefreshThumbnail(vod)) return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+  const bucket = Math.floor(Date.now() / thumbnailRefreshInterval(vod));
+  return `https://i.ytimg.com/vi/${id}/hqdefault.jpg?vodlink=${bucket}`;
 }
 
 function renderStatsAndLibrary() {
@@ -174,7 +204,7 @@ function renderVodGrid() {
     image.className = 'thumb';
     image.loading = 'lazy';
     image.referrerPolicy = 'no-referrer';
-    image.src = `https://i.ytimg.com/vi/${encodeURIComponent(vod.youtube_id)}/hqdefault.jpg`;
+    image.src = thumbnailUrl(vod);
     const info = document.createElement('div'); info.className = 'vod-info';
     const title = document.createElement('div'); title.className = 'vod-title'; title.textContent = vodTitle(vod);
     const meta = document.createElement('div'); meta.className = 'vod-meta';
@@ -214,8 +244,25 @@ function loadPlayer(vod, seconds) {
   $('viewerTitle').textContent = vodTitle(vod);
   $('viewerMeta').textContent = `${ownerText(vod)} — ${vod.game} · ${new Date(vod.started_at).toLocaleString()} · ${formatDuration(vod.duration_ms)}`;
   $('deleteVodButton').textContent = isMine(vod) ? 'Delete' : 'Remove';
+  if (vodIsProcessing(vod)) {
+    if (state.player?.stopVideo) state.player.stopVideo();
+    $('youtubePlayer').classList.add('hidden');
+    $('playerPlaceholder').textContent = 'YouTube is still processing this VOD. Playback will start automatically when it is ready.';
+    $('playerPlaceholder').classList.remove('hidden');
+    $('participantStrip').classList.add('hidden');
+    return;
+  }
+  if (vodProcessingFailed(vod)) {
+    if (state.player?.stopVideo) state.player.stopVideo();
+    $('youtubePlayer').classList.add('hidden');
+    $('playerPlaceholder').textContent = `YouTube could not process this VOD (status: ${String(vod.stream_status || '').trim()}).`;
+    $('playerPlaceholder').classList.remove('hidden');
+    $('participantStrip').classList.add('hidden');
+    return;
+  }
   $('playerPlaceholder').classList.add('hidden');
   $('youtubePlayer').classList.remove('hidden');
+  $('participantStrip').classList.remove('hidden');
   if (state.playerReady && state.player?.loadVideoById) state.player.loadVideoById({ videoId: vod.youtube_id, startSeconds: Math.floor(offset) });
   else if (window.YT?.Player) createPlayer(vod, offset);
 }
@@ -227,7 +274,7 @@ function createPlayer(vod, seconds = 0) {
     events: { onReady: () => { state.playerReady = true; } }
   });
 }
-window.onYouTubeIframeAPIReady = () => { if (state.selected) createPlayer(state.selected, 0); };
+window.onYouTubeIframeAPIReady = () => { if (state.selected && !vodIsProcessing(state.selected) && !vodProcessingFailed(state.selected)) createPlayer(state.selected, 0); };
 
 function currentPlayerOffset() { return state.playerReady && state.player?.getCurrentTime ? state.player.getCurrentTime() : 0; }
 function switchParticipant(target) {
@@ -277,15 +324,29 @@ function renderFooter(status) {
   }
 }
 
+function populateSelect(select, choices, selected) {
+  select.replaceChildren();
+  for (const choice of choices) select.append(new Option(choice, choice));
+  if (choices.includes(selected)) select.value = selected;
+  else if (choices.length) select.value = choices[0];
+}
+
 function renderSettings(snap) {
   const status = snap.status;
   $('settingsOverlay').classList.toggle('hidden', !state.settingsOpen);
-  $('encoder').value = snap.recorder.encoder;
+  populateSelect($('encoder'), snap.encoder_choices || ['H.264', 'HEVC'], snap.recorder.encoder);
+  const resolutionOptions = $('resolutionOptions');
+  resolutionOptions.replaceChildren();
+  for (const value of snap.resolution_options || []) resolutionOptions.append(new Option(value, value));
   $('bitrate').value = String(snap.recorder.bitrate_kbps);
   $('resolution').value = `${snap.recorder.width}x${snap.recorder.height}`;
   $('fps').value = String(snap.recorder.fps);
   $('privacyMode').value = status.privacy_mode;
   $('microphone').checked = status.microphone;
+  $('notifications').checked = status.notifications;
+  $('launchStartup').checked = status.launch_at_startup;
+  $('launchStartup').disabled = !snap.startup_supported;
+  $('launchStartup').title = snap.startup_supported ? '' : 'Launch on startup is available on Windows, macOS, and Linux desktop sessions.';
   $('stopButton').disabled = !status.current_game;
   $('syncButton').disabled = !status.signed_in_email;
   $('settingsSignInButton').classList.toggle('hidden', Boolean(status.signed_in_email));
@@ -295,7 +356,7 @@ window.vodlinkOpenSettings = () => { state.settingsOpen = true; renderSettings(s
 
 async function updateSetting(body, message = '') {
   try { await api('/api/settings', { method: 'POST', body: JSON.stringify(body) }); if (message) toast(message); await refresh(); }
-  catch (error) { toast(error.message, true); }
+  catch (error) { toast(error.message, true); await refresh(); }
 }
 
 function qualityTier(resolution) {
@@ -349,6 +410,8 @@ $('fps').addEventListener('change',()=>saveQualityField('fps'));
 $('bitrate').addEventListener('change',()=>updateSetting({bitrate_kbps:Number($('bitrate').value)}));
 $('privacyMode').addEventListener('change',()=>updateSetting({privacy_mode:$('privacyMode').value}));
 $('microphone').addEventListener('change',()=>updateSetting({microphone:$('microphone').checked}));
+$('notifications').addEventListener('change',()=>updateSetting({notifications:$('notifications').checked}));
+$('launchStartup').addEventListener('change',()=>updateSetting({launch_at_startup:$('launchStartup').checked}));
 $('syncButton').addEventListener('click',async()=>{try{await api('/api/sync',{method:'POST'});await refresh();}catch(e){toast(e.message,true);}});
 $('stopButton').addEventListener('click',async()=>{try{await api('/api/record/stop',{method:'POST'});await refresh();}catch(e){toast(e.message,true);}});
 $('addGameButton').addEventListener('click',()=>$('manualGameForm').classList.toggle('hidden'));
