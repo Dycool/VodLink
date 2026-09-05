@@ -266,7 +266,12 @@ impl GameDetector {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", miri))]
+fn scan_linux_processes() -> Vec<ProcessCandidate> {
+    Vec::new()
+}
+
+#[cfg(all(target_os = "linux", not(miri)))]
 fn scan_linux_processes() -> Vec<ProcessCandidate> {
     let mut result = Vec::new();
     let mut seen = HashSet::<String>::new();
@@ -303,7 +308,7 @@ fn scan_linux_processes() -> Vec<ProcessCandidate> {
     result
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn read_text_file(path: &Path) -> String {
     std::fs::read(path)
         .ok()
@@ -311,7 +316,7 @@ fn read_text_file(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn read_cmdline(path: &Path) -> Vec<String> {
     let Ok(data) = std::fs::read(path) else {
         return Vec::new();
@@ -324,7 +329,7 @@ fn read_cmdline(path: &Path) -> Vec<String> {
         .collect()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn looks_like_game_path(path: &Path) -> bool {
     let normalized = normalize_path(path);
     normalized.contains("/steamapps/common/")
@@ -333,7 +338,7 @@ fn looks_like_game_path(path: &Path) -> bool {
         || normalized.contains("/lutris/")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn add_process_candidate(
     out: &mut Vec<ProcessCandidate>,
     seen: &mut HashSet<String>,
@@ -556,7 +561,10 @@ mod tests {
                 fallbacks.insert(alias.to_owned(), (*game).to_owned());
             }
         }
-        assert_eq!(fallbacks.get("overwatch"), Some(&"Overwatch 2".to_owned()));
+        assert_eq!(
+            fallbacks.get("overwatch").map(String::as_str),
+            Some("Overwatch 2")
+        );
     }
 
     #[test]
