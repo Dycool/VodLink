@@ -46,6 +46,7 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
     })?;
 
     let controller = runtime.block_on(AppController::new())?;
+    runtime.block_on(controller.ensure_default_startup());
     let restore_controller = controller.clone();
     let _restore_task = runtime.spawn(async move {
         restore_controller.restore_stored_credentials().await;
@@ -139,6 +140,19 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
             } if event_window == window_id => {
                 if tray.icon.is_some() && !quit_requested {
                     window.set_visible(false);
+                    if controller.tray_close_tip_needed().unwrap_or(false) {
+                        if let Err(error) = controller.mark_tray_close_tip_shown() {
+                            tracing::warn!(%error, "Could not persist first tray-close notification state");
+                        } else if let Err(error) = notify_rust::Notification::new()
+                            .summary("VodLink is still running")
+                            .body("VodLink keeps watching for games in the background. Quit from the tray icon to exit.")
+                            .appname("VodLink")
+                            .timeout(Duration::from_millis(4000))
+                            .show()
+                        {
+                            tracing::warn!(%error, "Could not show the VodLink tray-close notification");
+                        }
+                    }
                 } else if !quit_requested {
                     quit_requested = true;
                     request_quit(runtime_handle.clone(), controller.clone(), tray.proxy.clone());
