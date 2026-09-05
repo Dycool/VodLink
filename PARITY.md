@@ -35,7 +35,10 @@ normal application workflows.
 - [x] First close notification and `tray_close_tip_shown` persistence exactly
       match the C++ client.
 - [x] Launch-at-startup persistence matches the C++ platform implementations.
-- [ ] Release updater behavior matches the C++ client.
+- [ ] Release updater behavior matches the C++ client end-to-end. Metadata,
+      exact Windows asset selection, SHA-256 verification, failure paths, and
+      successful handoff/quit semantics are implemented and fixture-tested;
+      packaged installer handoff still needs differential validation.
 
 ### Authentication gates
 - [ ] First-run setup page visually matches the C++ setup page.
