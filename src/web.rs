@@ -146,6 +146,7 @@ fn router(controller: Arc<AppController>) -> Router {
         .route("/api/clips/{youtube_id}", get(clips_for_vod))
         .route("/api/clips/import", post(import_clip))
         .route("/api/data-root", get(data_root))
+        .route("/api/reset", post(factory_reset))
         .route("/api/shutdown", post(shutdown))
         .with_state(controller)
 }
@@ -327,6 +328,16 @@ async fn import_clip(
 
 async fn data_root(State(controller): State<Arc<AppController>>) -> Json<ApiMessage> {
     ApiMessage::ok(controller.data_root().display().to_string())
+}
+
+async fn factory_reset(
+    State(controller): State<Arc<AppController>>,
+) -> Result<impl IntoResponse, ApiError> {
+    controller.factory_reset_local_data().await?;
+    if let Some(handler) = EXIT_HANDLER.get() {
+        handler();
+    }
+    Ok(ApiMessage::ok("VodLink local data reset. Closing…"))
 }
 
 async fn shutdown(
