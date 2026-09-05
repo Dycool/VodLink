@@ -14,6 +14,8 @@ impl AppController {
             auto_record: read_bool(&repository, AUTO_RECORD_SETTING, false)?,
             share_vods: read_bool(&repository, SHARE_SETTING, false)?,
             microphone: read_bool(&repository, MICROPHONE_SETTING, false)?,
+            notifications: read_bool(&repository, NOTIFICATIONS_SETTING, true)?,
+            launch_at_startup: crate::startup::enabled(),
             privacy_mode: normalized_privacy(
                 repository
                     .setting(PRIVACY_SETTING)?
@@ -60,7 +62,30 @@ impl AppController {
             worker_configured: self.config.worker_configured(),
             auth_configured: self.auth_configured(),
             stored_credentials,
+            startup_supported: crate::startup::supported(),
         })
+    }
+
+    #[cfg(feature = "desktop")]
+    pub(crate) async fn ensure_default_startup(&self) {
+        let preferred = read_bool(&self.repository, LAUNCH_AT_STARTUP_SETTING, true)
+            .unwrap_or(true);
+        if preferred && !crate::startup::enabled() {
+            match crate::startup::set_enabled(true) {
+                Ok(()) => {
+                    if let Err(error) = self
+                        .repository
+                        .set_setting(LAUNCH_AT_STARTUP_SETTING, "1")
+                    {
+                        tracing::warn!(%error, "Could not persist launch-at-startup default");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Could not enable launch-at-startup default");
+                }
+            }
+        }
+        self.status.write().await.launch_at_startup = crate::startup::enabled();
     }
 
     pub(crate) async fn restore_stored_credentials(&self) {
