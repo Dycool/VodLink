@@ -51,6 +51,10 @@ fn run_frontend(start_minimized: bool) -> Result<()> {
         .context("Could not initialize the VodLink async runtime")?;
     runtime.block_on(async move {
         let controller = app::AppController::new().await?;
+        let restore_controller = controller.clone();
+        std::mem::drop(tokio::spawn(async move {
+            restore_controller.restore_stored_credentials().await;
+        }));
         web::serve(controller, start_minimized).await
     })
 }
