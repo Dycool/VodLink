@@ -46,6 +46,11 @@ pub(crate) fn run(start_minimized: bool) -> Result<()> {
     })?;
 
     let controller = runtime.block_on(AppController::new())?;
+    let restore_controller = controller.clone();
+    let _restore_task = runtime.spawn(async move {
+        restore_controller.restore_stored_credentials().await;
+    });
+
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let show_proxy = event_loop.create_proxy();
     web::register_show_window_handler(Arc::new(move || {
