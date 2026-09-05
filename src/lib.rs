@@ -16,6 +16,8 @@ mod streaming;
 #[cfg(not(feature = "obs"))]
 #[path = "streaming_stub.rs"]
 mod streaming;
+#[cfg(all(feature = "desktop", target_os = "windows"))]
+mod updater;
 mod web;
 mod youtube;
 
