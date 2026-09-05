@@ -43,6 +43,7 @@ pub(crate) struct Snapshot {
     recorder: RecorderSettings,
     worker_configured: bool,
     auth_configured: bool,
+    stored_credentials: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -84,6 +85,7 @@ pub(crate) struct AppController {
     tokens: RwLock<AuthTokens>,
     status: RwLock<AppStatus>,
     stream: Mutex<StreamRuntime>,
+    explicitly_signed_out: AtomicBool,
     shutdown_requested: AtomicBool,
     shutdown_notify: Notify,
 }
