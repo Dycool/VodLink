@@ -65,11 +65,12 @@ impl AppController {
                 .as_deref()
                 .unwrap_or("H.264"),
         )?;
+        let native = native_recorder_resolution();
         let resolution = self
             .repository
             .setting(RESOLUTION_SETTING)?
-            .unwrap_or_else(|| "1920x1080".to_owned());
-        let (width, height) = parse_resolution(&resolution).unwrap_or((1920, 1080));
+            .unwrap_or_else(|| format!("{}x{}", native.0, native.1));
+        let (width, height) = parse_resolution(&resolution).unwrap_or(native);
         let fps = self
             .repository
             .setting(FPS_SETTING)?
@@ -80,8 +81,8 @@ impl AppController {
             .repository
             .setting(BITRATE_SETTING)?
             .and_then(|value| value.parse::<u32>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or_else(|| default_h264_bitrate(width, height, fps));
+            .filter(|value| (2500..=40_000).contains(value))
+            .unwrap_or_else(|| default_h264_bitrate(width, height, fps).clamp(2500, 40_000));
         Ok(RecorderSettings {
             encoder,
             bitrate_kbps,
