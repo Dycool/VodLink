@@ -165,6 +165,7 @@ pub(crate) async fn serve_bound(
         .context("VodLink local UI server failed")
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn serve(controller: Arc<AppController>, start_minimized: bool) -> Result<()> {
     let listener = match bind_ui() {
         Ok(listener) => listener,
