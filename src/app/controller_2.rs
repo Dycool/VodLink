@@ -5,6 +5,44 @@ fn validate_recorder_bitrate(value: u32) -> Result<u32> {
     Ok(value)
 }
 
+fn validate_manual_game_path(executable: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let is_app_bundle = executable.is_dir()
+            && executable
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("app"));
+        if !executable.is_file() && !is_app_bundle {
+            bail!("That executable does not exist.");
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if !executable.is_file() {
+        bail!("That executable does not exist.");
+    }
+
+    #[cfg(target_os = "windows")]
+    if !executable
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+    {
+        bail!("Please select the game's .exe file.");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if executable.metadata()?.permissions().mode() & 0o111 == 0 {
+            bail!("Please select an executable file.");
+        }
+    }
+
+    Ok(())
+}
+
 impl AppController {
     pub(crate) async fn update_settings(&self, update: SettingsUpdate) -> Result<()> {
         if let Some(value) = update.auto_record {
@@ -86,9 +124,7 @@ impl AppController {
 
     pub(crate) async fn add_manual_game(&self, executable: &str, display_name: &str) -> Result<()> {
         let executable = Path::new(executable);
-        if !executable.is_file() {
-            bail!("Select an existing game executable");
-        }
+        validate_manual_game_path(executable)?;
         add_manual_game(&self.repository, executable, display_name)?;
         let catalog = GameCatalog::load(&self.repository)?;
         {
@@ -241,5 +277,63 @@ mod controller_2_tests {
         assert_eq!(validate_recorder_bitrate(40_000).expect("maximum"), 40_000);
         assert!(validate_recorder_bitrate(2_499).is_err());
         assert!(validate_recorder_bitrate(40_001).is_err());
+    }
+
+    #[test]
+    fn manual_game_validation_rejects_missing_paths_like_cpp_picker() {
+        let missing = std::env::temp_dir().join("vodlink-missing-manual-game-entry");
+        assert!(validate_manual_game_path(&missing).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn manual_game_validation_requires_exe_on_windows() {
+        let root = std::env::temp_dir();
+        let good = root.join("vodlink-manual-game.exe");
+        let bad = root.join("vodlink-manual-game.txt");
+        std::fs::write(&good, b"fixture").expect("write exe fixture");
+        std::fs::write(&bad, b"fixture").expect("write txt fixture");
+        assert!(validate_manual_game_path(&good).is_ok());
+        assert_eq!(
+            validate_manual_game_path(&bad).expect_err("reject non-exe").to_string(),
+            "Please select the game's .exe file."
+        );
+        let _ = std::fs::remove_file(good);
+        let _ = std::fs::remove_file(bad);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn manual_game_validation_requires_executable_bit_on_linux() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "vodlink-manual-game-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"#!/bin/sh\n").expect("write fixture");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("make fixture non-executable");
+        assert_eq!(
+            validate_manual_game_path(&path)
+                .expect_err("reject non-executable")
+                .to_string(),
+            "Please select an executable file."
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fixture executable");
+        assert!(validate_manual_game_path(&path).is_ok());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn manual_game_validation_accepts_app_bundles_on_macos() {
+        let path = std::env::temp_dir().join(format!(
+            "vodlink-manual-game-{}.app",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create app bundle fixture");
+        assert!(validate_manual_game_path(&path).is_ok());
+        let _ = std::fs::remove_dir_all(path);
     }
 }
