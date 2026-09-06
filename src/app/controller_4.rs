@@ -1,3 +1,27 @@
+fn recommended_recorder_bitrate(width: u32, height: u32, fps: u32, encoder: &str) -> u32 {
+    let h264 = default_h264_bitrate(width, height, fps);
+    let efficient = {
+        let normalized = encoder.trim().to_lowercase();
+        normalized.contains("av1") || normalized.contains("hevc") || normalized.contains("265")
+    };
+    if !efficient {
+        return h264;
+    }
+
+    let pixels = u64::from(width) * u64::from(height);
+    let high = fps >= 50;
+    let (av_min, av_max) = if pixels > 2560_u64 * 1440 {
+        if high { (10_000, 40_000) } else { (8_000, 35_000) }
+    } else if pixels > 1920_u64 * 1080 {
+        if high { (6_000, 30_000) } else { (5_000, 25_000) }
+    } else if pixels > 1280_u64 * 720 {
+        if high { (4_000, 10_000) } else { (3_000, 8_000) }
+    } else {
+        (3_000, 8_000)
+    };
+    h264.clamp(av_min, av_max)
+}
+
 impl AppController {
     async fn fresh_tokens(&self) -> Result<AuthTokens> {
         let current = self.tokens.read().await.clone();
@@ -82,7 +106,9 @@ impl AppController {
             .setting(BITRATE_SETTING)?
             .and_then(|value| value.parse::<u32>().ok())
             .filter(|value| (2500..=40_000).contains(value))
-            .unwrap_or_else(|| default_h264_bitrate(width, height, fps).clamp(2500, 40_000));
+            .unwrap_or_else(|| {
+                recommended_recorder_bitrate(width, height, fps, &encoder).clamp(2500, 40_000)
+            });
         Ok(RecorderSettings {
             encoder,
             bitrate_kbps,
@@ -116,5 +142,26 @@ impl AppController {
 
     async fn set_error(&self, error: impl Into<String>) {
         self.status.write().await.error = error.into();
+    }
+}
+
+#[cfg(test)]
+mod controller_4_tests {
+    use super::*;
+
+    #[test]
+    fn recorder_recommendation_matches_cpp_youtube_ladder() {
+        assert_eq!(recommended_recorder_bitrate(1920, 1080, 60, "H.264"), 12_000);
+        assert_eq!(recommended_recorder_bitrate(1920, 1080, 60, "HEVC"), 10_000);
+        assert_eq!(recommended_recorder_bitrate(1920, 1080, 30, "AV1"), 8_000);
+        assert_eq!(recommended_recorder_bitrate(2560, 1440, 60, "HEVC"), 24_000);
+        assert_eq!(recommended_recorder_bitrate(3840, 2160, 60, "AV1"), 35_000);
+        assert_eq!(recommended_recorder_bitrate(1280, 720, 30, "HEVC"), 4_000);
+    }
+
+    #[test]
+    fn recorder_recommendation_uses_cpp_pixel_tiers_for_ultrawide_modes() {
+        assert_eq!(recommended_recorder_bitrate(3440, 1440, 60, "H.264"), 35_000);
+        assert_eq!(recommended_recorder_bitrate(2560, 1080, 60, "H.264"), 24_000);
     }
 }
