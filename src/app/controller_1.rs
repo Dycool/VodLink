@@ -201,7 +201,12 @@ impl AppController {
 
     pub(crate) async fn sign_out(&self) -> Result<()> {
         self.explicitly_signed_out.store(true, Ordering::Release);
-        self.stop_recording().await?;
+        // C++ treats active-stream cleanup as best-effort during account
+        // disconnect: it attempts cleanup first, but always clears credentials
+        // afterwards so a cleanup failure cannot leave the old account signed in.
+        if let Err(error) = self.stop_recording().await {
+            tracing::warn!(%error, "Stream cleanup failed while signing out");
+        }
         self.repository.remove_setting(REFRESH_TOKEN_SETTING)?;
         *self.tokens.write().await = AuthTokens::default();
         let mut status = self.status.write().await;
