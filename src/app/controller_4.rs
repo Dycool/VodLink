@@ -22,6 +22,25 @@ fn recommended_recorder_bitrate(width: u32, height: u32, fps: u32, encoder: &str
     h264.clamp(av_min, av_max)
 }
 
+fn initial_recorder_bitrate(
+    saved: Option<&str>,
+    width: u32,
+    height: u32,
+    fps: u32,
+    encoder: &str,
+) -> (u32, bool) {
+    if let Some(value) = saved {
+        if let Ok(parsed) = value.trim().parse::<i32>() {
+            return (parsed.clamp(2500, 40_000) as u32, false);
+        }
+    }
+
+    (
+        recommended_recorder_bitrate(width, height, fps, encoder).clamp(2500, 40_000),
+        true,
+    )
+}
+
 impl AppController {
     async fn fresh_tokens(&self) -> Result<AuthTokens> {
         let current = self.tokens.read().await.clone();
@@ -101,14 +120,18 @@ impl AppController {
             .and_then(|value| value.parse::<u32>().ok())
             .filter(|value| matches!(value, 30 | 60))
             .unwrap_or(60);
-        let bitrate_kbps = self
-            .repository
-            .setting(BITRATE_SETTING)?
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|value| (2500..=40_000).contains(value))
-            .unwrap_or_else(|| {
-                recommended_recorder_bitrate(width, height, fps, &encoder).clamp(2500, 40_000)
-            });
+        let saved_bitrate = self.repository.setting(BITRATE_SETTING)?;
+        let (bitrate_kbps, persist_default_bitrate) = initial_recorder_bitrate(
+            saved_bitrate.as_deref(),
+            width,
+            height,
+            fps,
+            &encoder,
+        );
+        if persist_default_bitrate {
+            self.repository
+                .set_setting(BITRATE_SETTING, &bitrate_kbps.to_string())?;
+        }
         Ok(RecorderSettings {
             encoder,
             bitrate_kbps,
@@ -163,5 +186,21 @@ mod controller_4_tests {
     fn recorder_recommendation_uses_cpp_pixel_tiers_for_ultrawide_modes() {
         assert_eq!(recommended_recorder_bitrate(3440, 1440, 60, "H.264"), 35_000);
         assert_eq!(recommended_recorder_bitrate(2560, 1080, 60, "H.264"), 24_000);
+    }
+
+    #[test]
+    fn saved_numeric_bitrate_is_clamped_like_cpp_spinbox() {
+        assert_eq!(initial_recorder_bitrate(Some("2499"), 1920, 1080, 60, "H.264"), (2500, false));
+        assert_eq!(initial_recorder_bitrate(Some("40001"), 1920, 1080, 60, "H.264"), (40_000, false));
+        assert_eq!(initial_recorder_bitrate(Some(" -5 "), 1920, 1080, 60, "H.264"), (2500, false));
+        assert_eq!(initial_recorder_bitrate(Some("12000"), 1920, 1080, 60, "H.264"), (12_000, false));
+    }
+
+    #[test]
+    fn missing_or_non_numeric_bitrate_uses_and_persists_cpp_default() {
+        assert_eq!(initial_recorder_bitrate(None, 1920, 1080, 60, "H.264"), (12_000, true));
+        assert_eq!(initial_recorder_bitrate(Some(""), 1920, 1080, 60, "HEVC"), (10_000, true));
+        assert_eq!(initial_recorder_bitrate(Some("garbage"), 3840, 2160, 60, "AV1"), (35_000, true));
+        assert_eq!(initial_recorder_bitrate(Some("9999999999"), 1920, 1080, 60, "H.264"), (12_000, true));
     }
 }
