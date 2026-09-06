@@ -60,7 +60,6 @@ impl AppController {
             }
             self.repository.set_setting(FPS_SETTING, &value.to_string())?;
         }
-        self.set_message("Settings saved").await;
         Ok(())
     }
 
