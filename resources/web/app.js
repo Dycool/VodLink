@@ -417,7 +417,13 @@ $('stopButton').addEventListener('click',async()=>{try{await api('/api/record/st
 $('addGameButton').addEventListener('click',()=>$('manualGameForm').classList.toggle('hidden'));
 $('confirmGameButton').addEventListener('click',async()=>{try{await api('/api/games',{method:'POST',body:JSON.stringify({executable:$('gameExecutable').value,name:$('gameName').value})});$('manualGameForm').classList.add('hidden');$('gameExecutable').value='';$('gameName').value='';toast('Game added');}catch(e){toast(e.message,true);}});
 $('settingsSignInButton').addEventListener('click',async()=>{try{await api('/api/sign-in',{method:'POST'});await refresh();}catch(e){toast(e.message,true);}});
-$('resetButton').addEventListener('click',()=>toast('Reset parity is not wired yet.',true));
+$('resetButton').addEventListener('click',async()=>{
+  const confirmed=confirm('Reset VodLink and close the app?\n\nThis deletes all local VodLink data on this computer: sign-in tokens, settings, friends, cached VODs, clips, games, and broken cache.\n\nIt does not delete videos or clips from YouTube.');
+  if(!confirmed)return;
+  const button=$('resetButton');
+  button.disabled=true;
+  try{await api('/api/reset',{method:'POST'});}catch(e){button.disabled=false;toast(e.message,true);}
+});
 
 refresh();
 setInterval(refresh,3000);
