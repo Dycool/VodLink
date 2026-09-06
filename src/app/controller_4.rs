@@ -29,10 +29,10 @@ fn initial_recorder_bitrate(
     fps: u32,
     encoder: &str,
 ) -> (u32, bool) {
-    if let Some(value) = saved {
-        if let Ok(parsed) = value.trim().parse::<i32>() {
-            return (parsed.clamp(2500, 40_000) as u32, false);
-        }
+    if let Some(value) = saved
+        && let Ok(parsed) = value.trim().parse::<i32>()
+    {
+        return (parsed.clamp(2500, 40_000) as u32, false);
     }
 
     (
