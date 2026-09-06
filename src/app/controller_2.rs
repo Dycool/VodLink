@@ -255,10 +255,7 @@ impl AppController {
     }
 
     pub(crate) async fn wait_shutdown(&self) {
-        if self.shutdown_requested.load(Ordering::Acquire) {
-            return;
-        }
-        self.shutdown_notify.notified().await;
+        wait_for_shutdown(&self.shutdown_requested, &self.shutdown_notify).await;
     }
 
     pub(crate) fn data_root(&self) -> &Path {
@@ -267,9 +264,49 @@ impl AppController {
 
 }
 
+async fn wait_for_shutdown(requested: &AtomicBool, notify: &Notify) {
+    // Register before inspecting the flag: notify_waiters does not retain a
+    // permit for a future waiter. Otherwise Quit can fall between the flag
+    // check and registration and leave HTTP graceful shutdown asleep forever.
+    let notified = notify.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+    if !requested.load(Ordering::Acquire) {
+        notified.await;
+    }
+}
+
 #[cfg(test)]
 mod controller_2_tests {
     use super::*;
+
+    #[test]
+    fn shutdown_requested_before_wait_returns_without_another_notification() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+        let requested = AtomicBool::new(true);
+        let notify = Notify::new();
+        let mut waiter = Box::pin(wait_for_shutdown(&requested, &notify));
+        assert!(waiter.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_ready());
+    }
+
+    #[test]
+    fn shutdown_wakes_all_registered_waiters() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        let requested = AtomicBool::new(false);
+        let notify = Notify::new();
+        let mut first = Box::pin(wait_for_shutdown(&requested, &notify));
+        let mut second = Box::pin(wait_for_shutdown(&requested, &notify));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        assert!(second.as_mut().poll(&mut cx).is_pending());
+        requested.store(true, Ordering::Release);
+        notify.notify_waiters();
+        assert!(first.as_mut().poll(&mut cx).is_ready());
+        assert!(second.as_mut().poll(&mut cx).is_ready());
+    }
 
     #[test]
     fn recorder_bitrate_matches_cpp_settings_range() {
