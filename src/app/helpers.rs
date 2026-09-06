@@ -103,19 +103,28 @@ fn resolution_options_from_sizes(
 
 fn available_resolutions(saved: &str) -> Vec<String> {
     let native = native_recorder_resolution();
-    let mut display_sizes = Vec::<(u32, u32)>::new();
-
-    #[cfg(feature = "desktop")]
-    if let Ok(displays) = display_info::DisplayInfo::all() {
-        for display in displays {
-            // Match the C++ settings list exactly: connected monitor modes are
-            // presented as reported. Only native_recorder_resolution() rounds
-            // the primary recorder default to encoder-compatible even values.
-            if display.width >= 640 && display.height >= 480 {
-                display_sizes.push((display.width, display.height));
+    let display_sizes = {
+        #[cfg(feature = "desktop")]
+        {
+            let mut sizes = Vec::<(u32, u32)>::new();
+            if let Ok(displays) = display_info::DisplayInfo::all() {
+                for display in displays {
+                    // Match the C++ settings list exactly: connected monitor modes are
+                    // presented as reported. Only native_recorder_resolution() rounds
+                    // the primary recorder default to encoder-compatible even values.
+                    if display.width >= 640 && display.height >= 480 {
+                        sizes.push((display.width, display.height));
+                    }
+                }
             }
+            sizes
         }
-    }
+
+        #[cfg(not(feature = "desktop"))]
+        {
+            Vec::new()
+        }
+    };
 
     resolution_options_from_sizes(native, display_sizes, saved)
 }
