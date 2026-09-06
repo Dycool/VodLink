@@ -84,6 +84,8 @@ jobs:
 
       - name: Stage OBS runtime for checks
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cargo obs-build build --out-dir target/debug
           cargo obs-build build --out-dir target/debug/deps
@@ -96,6 +98,8 @@ jobs:
 
       - name: Build release application
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           cargo obs-build build --out-dir target/release
           cargo build --release

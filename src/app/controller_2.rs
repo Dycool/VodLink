@@ -6,38 +6,35 @@ fn validate_recorder_bitrate(value: u32) -> Result<u32> {
 }
 
 fn validate_manual_game_path(executable: &Path) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        let is_app_bundle = executable.is_dir()
-            && executable
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("app"));
-        if !executable.is_file() && !is_app_bundle {
-            bail!("That executable does not exist.");
-        }
-    }
+    let metadata = executable.metadata().ok();
+    #[cfg(target_os = "linux")]
+    let is_executable = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.as_ref().is_some_and(|entry| entry.permissions().mode() & 0o111 != 0)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let is_executable = true;
+    validate_manual_game_entry(
+        executable, std::env::consts::OS,
+        metadata.as_ref().is_some_and(std::fs::Metadata::is_file),
+        metadata.as_ref().is_some_and(std::fs::Metadata::is_dir),
+        is_executable,
+    )
+}
 
-    #[cfg(not(target_os = "macos"))]
-    if !executable.is_file() {
+// Native metadata access stays outside the policy so Miri can exercise all
+// platform rules without granting host filesystem access.
+fn validate_manual_game_entry(executable: &Path, platform: &str, is_file: bool, is_dir: bool, is_executable: bool) -> Result<()> {
+    let extension = executable.extension().and_then(|value| value.to_str()).unwrap_or("");
+    let is_app_bundle = platform == "macos" && is_dir && extension.eq_ignore_ascii_case("app");
+    if !is_file && !is_app_bundle {
         bail!("That executable does not exist.");
     }
-
-    #[cfg(target_os = "windows")]
-    if !executable
-        .extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
-    {
+    if platform == "windows" && !extension.eq_ignore_ascii_case("exe") {
         bail!("Please select the game's .exe file.");
     }
-
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if executable.metadata()?.permissions().mode() & 0o111 == 0 {
-            bail!("Please select an executable file.");
-        }
+    if platform == "linux" && !is_executable {
+        bail!("Please select an executable file.");
     }
 
     Ok(())
@@ -317,12 +314,30 @@ mod controller_2_tests {
     }
 
     #[test]
+    fn manual_game_rules_cover_all_platforms_without_filesystem_access() {
+        for platform in ["windows", "linux", "macos"] {
+            assert_eq!(validate_manual_game_entry(Path::new("missing.exe"), platform, false, false, false)
+                .expect_err("missing path").to_string(), "That executable does not exist.");
+        }
+        assert!(validate_manual_game_entry(Path::new("game.EXE"), "windows", true, false, false).is_ok());
+        assert_eq!(validate_manual_game_entry(Path::new("game.txt"), "windows", true, false, true)
+            .expect_err("extension").to_string(), "Please select the game's .exe file.");
+        assert!(validate_manual_game_entry(Path::new("game.APP"), "macos", false, true, false).is_ok());
+        assert!(validate_manual_game_entry(Path::new("game"), "macos", true, false, false).is_ok());
+        assert!(validate_manual_game_entry(Path::new("folder"), "macos", false, true, false).is_err());
+        assert_eq!(validate_manual_game_entry(Path::new("game"), "linux", true, false, false)
+            .expect_err("execute permission").to_string(), "Please select an executable file.");
+        assert!(validate_manual_game_entry(Path::new("game"), "linux", true, false, true).is_ok());
+    }
+
+    #[cfg(not(miri))]
+    #[test]
     fn manual_game_validation_rejects_missing_paths_like_cpp_picker() {
         let missing = std::env::temp_dir().join("vodlink-missing-manual-game-entry");
         assert!(validate_manual_game_path(&missing).is_err());
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(not(miri), target_os = "windows"))]
     #[test]
     fn manual_game_validation_requires_exe_on_windows() {
         let root = std::env::temp_dir();
@@ -339,7 +354,7 @@ mod controller_2_tests {
         let _ = std::fs::remove_file(bad);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(not(miri), target_os = "linux"))]
     #[test]
     fn manual_game_validation_requires_executable_bit_on_linux() {
         use std::os::unix::fs::PermissionsExt;
@@ -362,7 +377,7 @@ mod controller_2_tests {
         let _ = std::fs::remove_file(path);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(not(miri), target_os = "macos"))]
     #[test]
     fn manual_game_validation_accepts_app_bundles_on_macos() {
         let path = std::env::temp_dir().join(format!(
