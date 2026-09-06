@@ -66,23 +66,12 @@ fn native_recorder_resolution() -> (u32, u32) {
     (1920, 1080)
 }
 
-fn available_resolutions(saved: &str) -> Vec<String> {
-    let mut sizes = Vec::<(u32, u32)>::new();
-    let native = native_recorder_resolution();
-    sizes.push(native);
-
-    #[cfg(feature = "desktop")]
-    if let Ok(displays) = display_info::DisplayInfo::all() {
-        for display in displays {
-            let width = display.width & !1;
-            let height = display.height & !1;
-            if width >= 640 && height >= 480 {
-                sizes.push((width, height));
-            }
-        }
-    }
-
-    sizes.extend([
+fn resolution_options_from_sizes(
+    native: (u32, u32),
+    mut display_sizes: Vec<(u32, u32)>,
+    saved: &str,
+) -> Vec<String> {
+    display_sizes.extend([
         (3840, 2160),
         (3440, 1440),
         (2560, 1440),
@@ -92,11 +81,11 @@ fn available_resolutions(saved: &str) -> Vec<String> {
         (1366, 768),
         (1280, 720),
     ]);
-    sizes.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    display_sizes.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
 
     let native_text = format!("{}x{}", native.0, native.1);
-    let mut result = vec![native_text.clone()];
-    for (width, height) in sizes {
+    let mut result = vec![native_text];
+    for (width, height) in display_sizes {
         let text = format!("{width}x{height}");
         if !result.contains(&text) {
             result.push(text);
@@ -110,6 +99,25 @@ fn available_resolutions(saved: &str) -> Vec<String> {
         result.push("1920x1080".to_owned());
     }
     result
+}
+
+fn available_resolutions(saved: &str) -> Vec<String> {
+    let native = native_recorder_resolution();
+    let mut display_sizes = Vec::<(u32, u32)>::new();
+
+    #[cfg(feature = "desktop")]
+    if let Ok(displays) = display_info::DisplayInfo::all() {
+        for display in displays {
+            // Match the C++ settings list exactly: connected monitor modes are
+            // presented as reported. Only native_recorder_resolution() rounds
+            // the primary recorder default to encoder-compatible even values.
+            if display.width >= 640 && display.height >= 480 {
+                display_sizes.push((display.width, display.height));
+            }
+        }
+    }
+
+    resolution_options_from_sizes(native, display_sizes, saved)
 }
 
 fn available_encoder_choices() -> Vec<String> {
@@ -240,8 +248,23 @@ mod tests {
 
     #[test]
     fn resolution_list_preserves_saved_choice() {
-        let choices = available_resolutions("2222x1112");
+        let choices = resolution_options_from_sizes((1920, 1080), Vec::new(), "2222x1112");
         assert_eq!(choices.first().map(String::as_str), Some("2222x1112"));
         assert!(choices.iter().any(|value| value == "1920x1080"));
+    }
+
+    #[test]
+    fn resolution_list_preserves_connected_monitor_dimensions() {
+        let choices = resolution_options_from_sizes(
+            (1920, 1080),
+            vec![(1365, 767), (3440, 1440), (1365, 767)],
+            "",
+        );
+        assert!(choices.iter().any(|value| value == "1365x767"));
+        assert_eq!(
+            choices.iter().filter(|value| value.as_str() == "1365x767").count(),
+            1
+        );
+        assert_eq!(choices.first().map(String::as_str), Some("1920x1080"));
     }
 }
